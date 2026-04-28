@@ -35,5 +35,5 @@ module Legion
   end
 end
 
-LexLLM::Provider.register(Legion::Extensions::Llm::Openai::PROVIDER_FAMILY,
-                          Legion::Extensions::Llm::Openai::Provider)
+Legion::Extensions::Llm::Provider.register(Legion::Extensions::Llm::Openai::PROVIDER_FAMILY,
+                                           Legion::Extensions::Llm::Openai::Provider)

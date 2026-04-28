@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
-require 'lex_llm'
+require 'legion/extensions/llm'
 require 'legion/json'
 
 module Legion
   module Extensions
     module Llm
       module Openai
-        # OpenAI provider implementation for the LexLLM base provider contract.
-        class Provider < LexLLM::Provider
-          include LexLLM::Provider::OpenAICompatible
+        # OpenAI provider implementation for the Legion::Extensions::Llm base provider contract.
+        class Provider < Legion::Extensions::Llm::Provider
+          include Legion::Extensions::Llm::Provider::OpenAICompatible
 
           class << self
             def slug = 'openai'

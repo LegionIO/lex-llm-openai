@@ -3,15 +3,15 @@
 require 'spec_helper'
 
 RSpec.describe Legion::Extensions::Llm::Openai do
-  let(:provider) { described_class::Provider.new(LexLLM.config) }
-  let(:chat_model) { LexLLM::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
+  let(:provider) { described_class::Provider.new(Legion::Extensions::Llm.config) }
+  let(:chat_model) { Legion::Extensions::Llm::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
 
   before do
-    LexLLM.config.openai_api_key = 'test-key'
-    LexLLM.config.openai_api_base = nil
-    LexLLM.config.openai_organization_id = nil
-    LexLLM.config.openai_project_id = nil
-    LexLLM.config.openai_use_system_role = nil
+    Legion::Extensions::Llm.config.openai_api_key = 'test-key'
+    Legion::Extensions::Llm.config.openai_api_base = nil
+    Legion::Extensions::Llm.config.openai_organization_id = nil
+    Legion::Extensions::Llm.config.openai_project_id = nil
+    Legion::Extensions::Llm.config.openai_use_system_role = nil
   end
 
   it 'exposes provider defaults with inherited fleet settings' do
@@ -23,12 +23,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(settings.dig(:instances, :default, :usage, :embedding)).to be true
   end
 
-  it 'registers the LexLLM provider class' do
-    expect(LexLLM::Provider.resolve(:openai)).to eq(described_class::Provider)
+  it 'registers the Legion::Extensions::Llm provider class' do
+    expect(Legion::Extensions::Llm::Provider.resolve(:openai)).to eq(described_class::Provider)
   end
 
-  it 'uses the shared OpenAI-compatible LexLLM adapter' do
-    expect(described_class::Provider.ancestors).to include(LexLLM::Provider::OpenAICompatible)
+  it 'uses the shared OpenAI-compatible Legion::Extensions::Llm adapter' do
+    expect(described_class::Provider.ancestors).to include(Legion::Extensions::Llm::Provider::OpenAICompatible)
   end
 
   it 'exposes OpenAI endpoint helpers' do
@@ -37,7 +37,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(endpoint_helpers).to eq(expected_endpoint_helpers)
   end
 
-  it 'maps chat completion payloads through the shared LexLLM provider adapter' do
+  it 'maps chat completion payloads through the shared Legion::Extensions::Llm provider adapter' do
     expect(chat_payload).to include(expected_chat_payload)
   end
 
@@ -78,7 +78,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   end
 
   def chat_payload
-    provider.send(:render_payload, [LexLLM::Message.new(role: :user, content: 'brief')],
+    provider.send(:render_payload, [Legion::Extensions::Llm::Message.new(role: :user, content: 'brief')],
                   tools: {}, temperature: 0.2, model: chat_model, stream: true, schema: nil,
                   thinking: { effort: 'medium' }, tool_prefs: nil)
   end

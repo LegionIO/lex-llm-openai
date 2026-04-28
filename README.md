@@ -6,7 +6,7 @@ This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm` 
 
 ## What It Provides
 
-- `LexLLM::Provider` registration as `:openai`
+- `Legion::Extensions::Llm::Provider` registration as `:openai`
 - chat completions through `POST /v1/chat/completions`
 - streaming chat completions through the same chat completions endpoint
 - model discovery through `GET /v1/models`
@@ -17,7 +17,7 @@ This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm` 
 - image editing through `POST /v1/images/edits`
 - image variation endpoint helper for `POST /v1/images/variations`
 - audio transcription through `POST /v1/audio/transcriptions`
-- shared OpenAI-compatible request/response mapping via `LexLLM::Provider::OpenAICompatible`
+- shared OpenAI-compatible request/response mapping via `Legion::Extensions::Llm::Provider::OpenAICompatible`
 - shared fleet/default settings via `Legion::Extensions::Llm.provider_settings`
 
 ## Defaults
@@ -42,7 +42,7 @@ Legion::Extensions::Llm::Openai.default_settings
 ## Configuration
 
 ```ruby
-LexLLM.configure do |config|
+Legion::Extensions::Llm.configure do |config|
   config.openai_api_key = ENV.fetch("OPENAI_API_KEY")
   config.default_model = "gpt-5.2"
   config.default_embedding_model = "text-embedding-3-small"
