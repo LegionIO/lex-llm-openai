@@ -11,6 +11,8 @@ module Legion
           include Legion::Extensions::Llm::Provider::OpenAICompatible
 
           class << self
+            attr_writer :registry_publisher
+
             def slug = 'openai'
             def configuration_requirements = %i[openai_api_key]
 
@@ -25,6 +27,10 @@ module Legion
             end
 
             def capabilities = Capabilities
+
+            def registry_publisher
+              @registry_publisher ||= RegistryPublisher.new
+            end
           end
 
           # Provider-level capability checks based on current OpenAI model families.
@@ -87,6 +93,12 @@ module Legion
 
           def retrieve_model(model)
             connection.get("#{models_url}/#{model}").body
+          end
+
+          def list_models
+            super.tap do |models|
+              self.class.registry_publisher.publish_models_async(models, readiness: readiness(live: false))
+            end
           end
 
           private
