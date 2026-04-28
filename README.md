@@ -1,8 +1,10 @@
 # lex-llm-openai
 
-LegionIO LLM provider extension for Openai.
+LegionIO LLM provider extension for OpenAI.
 
 This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm` for shared provider-neutral routing, fleet, and schema primitives.
+
+Load it with `require 'legion/extensions/llm/openai'`.
 
 ## What It Provides
 

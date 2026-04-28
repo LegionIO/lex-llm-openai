@@ -7,8 +7,8 @@ Gem::Specification.new do |spec|
   spec.version       = Legion::Extensions::Llm::Openai::VERSION
   spec.authors       = ['LegionIO']
   spec.email         = ['matthewdiverson@gmail.com']
-  spec.summary       = 'LegionIO LLM Openai provider extension'
-  spec.description   = 'Openai provider integration for the LegionIO LLM routing framework.'
+  spec.summary       = 'LegionIO LLM OpenAI provider extension'
+  spec.description   = 'OpenAI provider integration for the LegionIO LLM routing framework.'
   spec.homepage      = 'https://github.com/LegionIO/lex-llm-openai'
   spec.license       = 'MIT'
   spec.required_ruby_version = '>= 3.4'
@@ -23,9 +23,5 @@ Gem::Specification.new do |spec|
   spec.files = `git ls-files -z`.split("\x0").reject { |file| file.match(%r{^(spec|test|features|tmp|coverage)/}) }
   spec.require_paths = ['lib']
 
-  spec.add_dependency 'faraday', '>= 2.0'
-  spec.add_dependency 'legion-json', '>= 1.0'
-  spec.add_dependency 'legion-logging', '>= 1.0'
-  spec.add_dependency 'legion-settings', '>= 1.3.14'
   spec.add_dependency 'lex-llm', '>= 0.1.3'
 end
