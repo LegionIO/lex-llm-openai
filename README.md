@@ -20,6 +20,7 @@ Load it with `require 'legion/extensions/llm/openai'`.
 - image variation endpoint helper for `POST /v1/images/variations`
 - audio transcription through `POST /v1/audio/transcriptions`
 - shared OpenAI-compatible request/response mapping via `Legion::Extensions::Llm::Provider::OpenAICompatible`
+- normalized chat, embedding, moderation, image, and audio capability mapping for discovered models
 - shared fleet/default settings via `Legion::Extensions::Llm.provider_settings`
 
 ## Defaults

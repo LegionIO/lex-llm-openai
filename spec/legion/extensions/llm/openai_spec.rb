@@ -45,6 +45,11 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(openai_capability_checks).to eq([true, true, true, true, true, false])
   end
 
+  it 'maps discovered models to explicit routing metadata' do
+    expect(parsed_models.map(&:capabilities)).to eq([%w[streaming function_calling vision], %w[embeddings]])
+    expect(parsed_models.map { |model| model.modalities.to_h }).to eq(expected_modalities)
+  end
+
   def endpoint_helpers
     [
       provider.chat_url,
@@ -103,5 +108,30 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       capabilities.audio_transcription?('gpt-4o-transcribe'),
       capabilities.chat?('text-embedding-3-small')
     ]
+  end
+
+  def parsed_models
+    provider.send(:parse_list_models_response, fake_response(models_body), :openai,
+                  described_class::Provider.capabilities)
+  end
+
+  def expected_modalities
+    [
+      { input: %w[text image], output: %w[text] },
+      { input: %w[text], output: %w[embeddings] }
+    ]
+  end
+
+  def models_body
+    {
+      'data' => [
+        { 'id' => 'gpt-5.2', 'created' => 1 },
+        { 'id' => 'text-embedding-3-small', 'created' => 2 }
+      ]
+    }
+  end
+
+  def fake_response(body)
+    Struct.new(:body).new(body)
   end
 end

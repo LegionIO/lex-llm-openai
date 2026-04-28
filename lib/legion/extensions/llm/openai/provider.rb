@@ -56,6 +56,8 @@ module Legion
             end
 
             def model_id(model)
+              return model.fetch('id', '') if model.is_a?(Hash)
+
               model.respond_to?(:id) ? model.id.to_s : model.to_s
             end
 
