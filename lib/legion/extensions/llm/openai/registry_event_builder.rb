@@ -6,7 +6,7 @@ module Legion
       module Openai
         # Builds sanitized lex-llm registry envelopes for OpenAI provider state.
         class RegistryEventBuilder
-          include Legion::Logging::Helper if defined?(Legion::Logging::Helper)
+          include Legion::Logging::Helper
 
           def model_available(model, readiness:)
             registry_event_class.available(
@@ -61,10 +61,8 @@ module Legion
             value = configured_node.to_s.strip
             value.empty? ? :openai : value.to_sym
           rescue StandardError => e
-            if respond_to?(:handle_exception)
-              handle_exception(e, level: :debug, handled: true,
-                                  operation: 'provider_instance')
-            end
+            handle_exception(e, level: :debug, handled: true,
+                                operation: 'provider_instance')
             :openai
           end
 
