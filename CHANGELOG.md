@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8] - 2026-04-30
+- Add Legion::Logging::Helper to all modules and classes for structured observability
+- Replace bare rescue blocks with handle_exception for unified error telemetry
+- Add info-level action logging for provider registration, model listing, model retrieval, and registry publishing
+- Remove manual log_publish_failure helper in favor of handle_exception
+- Update README to reflect current capabilities and architecture
+
 ## [0.1.7] - 2026-04-30
 - Enable stream_usage_supported? for streaming token usage reporting
 

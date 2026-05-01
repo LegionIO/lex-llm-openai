@@ -9,6 +9,7 @@ module Legion
         # OpenAI provider implementation for the Legion::Extensions::Llm base provider contract.
         class Provider < Legion::Extensions::Llm::Provider
           include Legion::Extensions::Llm::Provider::OpenAICompatible
+          include Legion::Logging::Helper if defined?(Legion::Logging::Helper)
 
           class << self
             attr_writer :registry_publisher
@@ -94,13 +95,28 @@ module Legion
           def images_url(with: nil, mask: nil) = super
 
           def retrieve_model(model)
+            log.info("Retrieving model: #{model}") if respond_to?(:log)
             connection.get("#{models_url}/#{model}").body
+          rescue StandardError => e
+            if respond_to?(:handle_exception)
+              handle_exception(e, level: :error, handled: true,
+                                  operation: 'retrieve_model')
+            end
+            raise
           end
 
           def list_models
+            log.info('Listing OpenAI models') if respond_to?(:log)
             super.tap do |models|
+              log.info("Discovered #{models.size} OpenAI models") if respond_to?(:log)
               self.class.registry_publisher.publish_models_async(models, readiness: readiness(live: false))
             end
+          rescue StandardError => e
+            if respond_to?(:handle_exception)
+              handle_exception(e, level: :error, handled: true,
+                                  operation: 'list_models')
+            end
+            raise
           end
 
           private

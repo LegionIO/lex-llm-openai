@@ -6,6 +6,8 @@ module Legion
       module Openai
         # Best-effort publisher for OpenAI provider availability events.
         class RegistryPublisher
+          include Legion::Logging::Helper if defined?(Legion::Logging::Helper)
+
           APP_ID = 'lex-llm-openai'
 
           def initialize(builder: RegistryEventBuilder.new)
@@ -13,6 +15,7 @@ module Legion
           end
 
           def publish_models_async(models, readiness:)
+            log.info("Publishing #{Array(models).size} model(s) to llm.registry") if respond_to?(:log)
             schedule do
               Array(models).each do |model|
                 publish_event(@builder.model_available(model, readiness:))
@@ -29,10 +32,10 @@ module Legion
               Thread.current.abort_on_exception = false
               yield
             rescue StandardError => e
-              log_publish_failure(e, level: :debug)
+              handle_exception(e, level: :debug, handled: true, operation: 'schedule') if respond_to?(:handle_exception)
             end
           rescue StandardError => e
-            log_publish_failure(e, level: :debug)
+            handle_exception(e, level: :debug, handled: true, operation: 'schedule') if respond_to?(:handle_exception)
             false
           end
 
@@ -41,7 +44,10 @@ module Legion
 
             message_class.new(event:, app_id: APP_ID).publish(spool: false)
           rescue StandardError => e
-            log_publish_failure(e)
+            if respond_to?(:handle_exception)
+              handle_exception(e, level: :warn, handled: true,
+                                  operation: 'publish_event')
+            end
             false
           end
 
@@ -52,7 +58,11 @@ module Legion
             return true unless ::Legion::Transport::Connection.respond_to?(:session_open?)
 
             ::Legion::Transport::Connection.session_open?
-          rescue StandardError
+          rescue StandardError => e
+            if respond_to?(:handle_exception)
+              handle_exception(e, level: :debug, handled: true,
+                                  operation: 'publishing_available?')
+            end
             false
           end
 
@@ -66,7 +76,11 @@ module Legion
 
             require 'legion/extensions/llm/openai/transport/messages/registry_event'
             message_class_defined?
-          rescue LoadError
+          rescue LoadError => e
+            if respond_to?(:handle_exception)
+              handle_exception(e, level: :debug, handled: true,
+                                  operation: 'transport_message_available?')
+            end
             false
           end
 
@@ -76,18 +90,6 @@ module Legion
 
           def message_class
             ::Legion::Extensions::Llm::Openai::Transport::Messages::RegistryEvent
-          end
-
-          def log_publish_failure(error, level: :warn)
-            message = "[lex-llm-openai] llm.registry publish failed: #{error.class}: #{error.message}"
-            logger = ::Legion::Extensions::Llm.logger if defined?(::Legion::Extensions::Llm)
-            if logger.respond_to?(level)
-              logger.public_send(level, message)
-            elsif logger.respond_to?(:debug)
-              logger.debug(message)
-            end
-          rescue StandardError
-            nil
           end
         end
       end

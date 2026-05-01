@@ -12,6 +12,7 @@ module Legion
       # Openai provider extension namespace.
       module Openai
         extend ::Legion::Extensions::Core if ::Legion::Extensions.const_defined?(:Core, false)
+        extend ::Legion::Logging::Helper if defined?(::Legion::Logging::Helper)
 
         PROVIDER_FAMILY = :openai
 
@@ -39,3 +40,6 @@ end
 
 Legion::Extensions::Llm::Provider.register(Legion::Extensions::Llm::Openai::PROVIDER_FAMILY,
                                            Legion::Extensions::Llm::Openai::Provider)
+if defined?(Legion::Logging::Helper) && Legion::Extensions::Llm::Openai.respond_to?(:log)
+  Legion::Extensions::Llm::Openai.log.info('Registered OpenAI provider for :openai family')
+end
