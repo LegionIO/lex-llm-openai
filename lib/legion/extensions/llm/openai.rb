@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require 'legion/extensions/llm'
-require 'legion/extensions/llm/openai/registry_event_builder'
-require 'legion/extensions/llm/openai/registry_publisher'
 require 'legion/extensions/llm/openai/provider'
 require 'legion/extensions/llm/openai/version'
 
@@ -17,17 +15,18 @@ module Legion
         PROVIDER_FAMILY = :openai
 
         def self.default_settings
-          ::Legion::Extensions::Llm.provider_settings(
-            family: PROVIDER_FAMILY,
-            instance: {
-              endpoint: 'https://api.openai.com',
-              tier: :frontier,
-              transport: :http,
-              credentials: { api_key: 'env://OPENAI_API_KEY' },
-              usage: { inference: true, embedding: true, moderation: true, image: true, audio: true },
-              limits: { concurrency: 4 }
-            }
-          )
+          {
+            enabled: false,
+            default_model: 'gpt-4o',
+            api_key: nil,
+            organization_id: nil,
+            project_id: nil,
+            model_whitelist: [],
+            model_blacklist: [],
+            model_cache_ttl: 3600,
+            tls: { enabled: false, verify: :peer },
+            instances: {}
+          }
         end
 
         def self.provider_class
@@ -37,7 +36,3 @@ module Legion
     end
   end
 end
-
-Legion::Extensions::Llm::Provider.register(Legion::Extensions::Llm::Openai::PROVIDER_FAMILY,
-                                           Legion::Extensions::Llm::Openai::Provider)
-Legion::Extensions::Llm::Openai.log.info('Registered OpenAI provider for :openai family')

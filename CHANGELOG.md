@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0] - 2026-04-30
+- **BREAKING**: Adopt base contract from lex-llm 0.1.9; require `lex-llm >= 0.1.9`
+- Replace `provider_settings`-based `default_settings` with flat provider defaults (enabled, default_model, api_key, etc.)
+- Remove deprecated `Provider.register` call; configuration options are now registered at class-load time
+- Delete local `RegistryPublisher` and `RegistryEventBuilder`; use parameterized base classes from lex-llm
+- Delete local `transport/` directory (exchanges, messages); use shared transport from lex-llm
+- Add static `CAPABILITY_MAP` for known OpenAI model families; `list_models` now returns `Model::Info` structs directly
+- `list_models` no longer delegates to `parse_list_models_response`; builds `Model::Info` via the static capability map
+
 ## [0.1.8] - 2026-04-30
 - Add Legion::Logging::Helper to all modules and classes for structured observability
 - Replace bare rescue blocks with handle_exception for unified error telemetry

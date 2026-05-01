@@ -12,7 +12,11 @@ Metrics/BlockLength:
   Exclude:
     - "*.gemspec"
     - spec/**/*
+Metrics/ClassLength:
+  Max: 200
 Metrics/MethodLength:
   Enabled: false
+RSpec/ExampleLength:
+  Max: 10
 RSpec/MultipleExpectations:
   Enabled: false

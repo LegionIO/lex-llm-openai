@@ -5,7 +5,7 @@ require 'spec_helper'
 RSpec.describe Legion::Extensions::Llm::Openai do
   let(:provider) { described_class::Provider.new(Legion::Extensions::Llm.config) }
   let(:chat_model) { Legion::Extensions::Llm::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
-  let(:registry_publisher) { instance_double(described_class::RegistryPublisher) }
+  let(:registry_publisher) { instance_double(Legion::Extensions::Llm::RegistryPublisher) }
 
   before do
     Legion::Extensions::Llm.config.openai_api_key = 'test-key'
@@ -15,17 +15,21 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     Legion::Extensions::Llm.config.openai_use_system_role = nil
   end
 
-  it 'exposes provider defaults with inherited fleet settings' do
+  it 'exposes flat provider defaults without legacy provider_settings' do
     settings = described_class.default_settings
 
-    expect(settings[:provider_family]).to eq(:openai)
-    expect(settings[:fleet]).to include(:enabled)
-    expect(settings.dig(:instances, :default, :endpoint)).to eq('https://api.openai.com')
-    expect(settings.dig(:instances, :default, :usage, :embedding)).to be true
+    expect(settings[:enabled]).to be false
+    expect(settings[:default_model]).to eq('gpt-4o')
+    expect(settings[:api_key]).to be_nil
+    expect(settings[:instances]).to eq({})
+    expect(settings).not_to have_key(:provider_family)
+    expect(settings).not_to have_key(:fleet)
   end
 
-  it 'registers the Legion::Extensions::Llm provider class' do
-    expect(Legion::Extensions::Llm::Provider.resolve(:openai)).to eq(described_class::Provider)
+  it 'does not register the provider in the deprecated Provider.providers hash' do
+    # The old Provider.register call has been removed; loading the gem should
+    # not add an entry to the deprecated providers hash.
+    expect(Legion::Extensions::Llm::Provider.providers).not_to have_key(:openai)
   end
 
   it 'uses the shared OpenAI-compatible Legion::Extensions::Llm adapter' do
@@ -46,12 +50,21 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(openai_capability_checks).to eq([true, true, true, true, true, false])
   end
 
-  it 'maps discovered models to explicit routing metadata' do
-    expect(parsed_models.map(&:capabilities)).to eq([%w[streaming function_calling vision], %w[embeddings]])
-    expect(parsed_models.map { |model| model.modalities.to_h }).to eq(expected_modalities)
+  it 'maps discovered models to Model::Info with static capability map' do
+    models = provider.send(:build_model_infos, models_body)
+
+    gpt_model = models.find { |m| m.id == 'gpt-5.2' }
+    embed_model = models.find { |m| m.id == 'text-embedding-3-small' }
+
+    expect(gpt_model).to be_a(Legion::Extensions::Llm::Model::Info)
+    expect(gpt_model.capabilities).to include(:completion, :streaming, :function_calling, :vision)
+    expect(gpt_model.modalities_input).to include(:text, :image)
+
+    expect(embed_model.capabilities).to eq([:embedding])
+    expect(embed_model.modalities_output).to eq([:embeddings])
   end
 
-  it 'publishes discovered models asynchronously through the registry publisher' do
+  it 'publishes discovered models asynchronously through the base registry publisher' do
     stub_registry_publisher
     stub_model_discovery
 
@@ -60,12 +73,28 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect_registry_publish(models)
   end
 
-  it 'builds sanitized lex-llm registry events for OpenAI model availability' do
-    events = capture_registry_events([chat_model], readiness: { ready: true })
+  it 'uses the base RegistryPublisher from lex-llm' do
+    publisher = described_class::Provider.registry_publisher
+    expect(publisher).to be_a(Legion::Extensions::Llm::RegistryPublisher)
+    expect(publisher.provider_family).to eq(:openai)
+  end
 
-    expect(events.first.to_h).to include(event_type: :offering_available)
-    expect(events.first.to_h.dig(:offering, :provider_family)).to eq(:openai)
-    expect(events.first.to_h.dig(:offering, :model)).to eq('gpt-5.2')
+  it 'builds sanitized lex-llm registry events via the base RegistryEventBuilder' do
+    builder = Legion::Extensions::Llm::RegistryEventBuilder.new(provider_family: :openai)
+    event = builder.model_available(chat_model, readiness: { ready: true })
+
+    expect(event.to_h).to include(event_type: :offering_available)
+    expect(event.to_h.dig(:offering, :provider_family)).to eq(:openai)
+    expect(event.to_h.dig(:offering, :model)).to eq('gpt-5.2')
+  end
+
+  it 'does not define local RegistryPublisher or RegistryEventBuilder classes' do
+    expect(described_class.const_defined?(:RegistryPublisher, false)).to be false
+    expect(described_class.const_defined?(:RegistryEventBuilder, false)).to be false
+  end
+
+  it 'does not ship a local transport directory' do
+    expect(described_class.const_defined?(:Transport, false)).to be false
   end
 
   def endpoint_helpers
@@ -128,18 +157,6 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     ]
   end
 
-  def parsed_models
-    provider.send(:parse_list_models_response, fake_response(models_body), :openai,
-                  described_class::Provider.capabilities)
-  end
-
-  def expected_modalities
-    [
-      { input: %w[text image], output: %w[text] },
-      { input: %w[text], output: %w[embeddings] }
-    ]
-  end
-
   def models_body
     {
       'data' => [
@@ -165,15 +182,5 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   def expect_registry_publish(models)
     expect(registry_publisher).to have_received(:publish_models_async)
       .with(models, readiness: hash_including(provider: :openai, live: false))
-  end
-
-  def capture_registry_events(models, readiness:)
-    publisher = described_class::RegistryPublisher.new
-    events = []
-    allow(publisher).to receive(:publishing_available?).and_return(true)
-    allow(publisher).to receive(:publish_event) { |event| events << event }
-    allow(Thread).to receive(:new).and_yield
-    publisher.publish_models_async(models, readiness:)
-    events
   end
 end

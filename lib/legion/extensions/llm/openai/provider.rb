@@ -11,6 +11,83 @@ module Legion
           include Legion::Extensions::Llm::Provider::OpenAICompatible
           include Legion::Logging::Helper
 
+          # ── Static capability map for known OpenAI model families ──────
+          # Maps model-id prefixes to a set of capabilities and modality
+          # vectors. Used by list_models to build Model::Info structs from
+          # the raw /v1/models response.
+          CAPABILITY_MAP = {
+            'gpt-4o' => {
+              capabilities: %i[completion streaming function_calling vision structured_output],
+              modalities_input: %w[text image audio],
+              modalities_output: %w[text]
+            },
+            'gpt-4.1' => {
+              capabilities: %i[completion streaming function_calling vision structured_output],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'gpt-4' => {
+              capabilities: %i[completion streaming function_calling vision],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'gpt-5' => {
+              capabilities: %i[completion streaming function_calling vision structured_output reasoning],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'o4' => {
+              capabilities: %i[completion streaming function_calling vision reasoning],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'o3' => {
+              capabilities: %i[completion streaming function_calling vision reasoning],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'o1' => {
+              capabilities: %i[completion streaming function_calling vision reasoning],
+              modalities_input: %w[text image],
+              modalities_output: %w[text]
+            },
+            'text-embedding-' => {
+              capabilities: %i[embedding],
+              modalities_input: %w[text],
+              modalities_output: %w[embeddings]
+            },
+            'omni-moderation' => {
+              capabilities: %i[moderation],
+              modalities_input: %w[text image],
+              modalities_output: %w[moderation]
+            },
+            'text-moderation' => {
+              capabilities: %i[moderation],
+              modalities_input: %w[text],
+              modalities_output: %w[moderation]
+            },
+            'gpt-image' => {
+              capabilities: %i[image_generation],
+              modalities_input: %w[text image],
+              modalities_output: %w[image]
+            },
+            'dall-e' => {
+              capabilities: %i[image_generation],
+              modalities_input: %w[text],
+              modalities_output: %w[image]
+            },
+            'whisper' => {
+              capabilities: %i[audio_transcription],
+              modalities_input: %w[audio],
+              modalities_output: %w[text]
+            },
+            'tts' => {
+              capabilities: %i[audio_generation],
+              modalities_input: %w[text],
+              modalities_output: %w[audio]
+            }
+          }.freeze
+
           class << self
             attr_writer :registry_publisher
 
@@ -30,7 +107,7 @@ module Legion
             def capabilities = Capabilities
 
             def registry_publisher
-              @registry_publisher ||= RegistryPublisher.new
+              @registry_publisher ||= Legion::Extensions::Llm::RegistryPublisher.new(provider_family: :openai)
             end
           end
 
@@ -105,10 +182,11 @@ module Legion
 
           def list_models
             log.info('Listing OpenAI models')
-            super.tap do |models|
-              log.info("Discovered #{models.size} OpenAI models")
-              self.class.registry_publisher.publish_models_async(models, readiness: readiness(live: false))
-            end
+            raw = connection.get(models_url)
+            models = build_model_infos(raw.body)
+            log.info("Discovered #{models.size} OpenAI models")
+            self.class.registry_publisher.publish_models_async(models, readiness: readiness(live: false))
+            models
           rescue StandardError => e
             handle_exception(e, level: :error, handled: true,
                                 operation: 'list_models')
@@ -116,6 +194,43 @@ module Legion
           end
 
           private
+
+          def build_model_infos(body)
+            body.fetch('data', []).map do |raw_model|
+              id = raw_model.fetch('id')
+              cap_entry = capability_entry_for(id)
+
+              Legion::Extensions::Llm::Model::Info.new(
+                id: id,
+                name: id,
+                provider: :openai,
+                capabilities: cap_entry[:capabilities],
+                modalities_input: cap_entry[:modalities_input],
+                modalities_output: cap_entry[:modalities_output],
+                metadata: {
+                  created_at: model_created_at(raw_model['created']),
+                  raw: raw_model
+                }.compact
+              )
+            end
+          end
+
+          def capability_entry_for(model_id)
+            CAPABILITY_MAP.each do |prefix, entry|
+              return entry if model_id.start_with?(prefix)
+            end
+
+            # Fallback for unknown models: assume chat-capable
+            {
+              capabilities: %i[completion streaming],
+              modalities_input: %w[text],
+              modalities_output: %w[text]
+            }
+          end
+
+          def model_created_at(value)
+            value.is_a?(Numeric) ? Time.at(value).utc : value
+          end
 
           def maybe_normalize_temperature(temperature, model)
             model_id = model.id.to_s
@@ -129,3 +244,8 @@ module Legion
     end
   end
 end
+
+# Register configuration options so Legion::Extensions::Llm::Configuration knows about them.
+Legion::Extensions::Llm::Configuration.register_provider_options(
+  Legion::Extensions::Llm::Openai::Provider.configuration_options
+)
