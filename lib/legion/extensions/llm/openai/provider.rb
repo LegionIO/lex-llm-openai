@@ -73,6 +73,8 @@ module Legion
             end
           end
 
+          def stream_usage_supported? = true
+
           def api_base
             config.openai_api_base || 'https://api.openai.com'
           end

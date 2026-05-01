@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.1.7] - 2026-04-30
+- Enable stream_usage_supported? for streaming token usage reporting
+
 ## 0.1.6 - 2026-04-28
 
 - Publish best-effort `llm.registry` discovered-model availability events when transport is already loaded.
