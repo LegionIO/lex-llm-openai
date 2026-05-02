@@ -244,10 +244,3 @@ module Legion
     end
   end
 end
-
-# Register configuration options so Legion::Extensions::Llm::Configuration knows about them.
-if Legion::Extensions::Llm::Configuration.respond_to?(:register_provider_options)
-  Legion::Extensions::Llm::Configuration.register_provider_options(
-    Legion::Extensions::Llm::Openai::Provider.configuration_options
-  )
-end
