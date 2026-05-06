@@ -116,5 +116,3 @@ module Legion
     end
   end
 end
-
-Legion::Extensions::Llm::Openai.register_discovered_instances
