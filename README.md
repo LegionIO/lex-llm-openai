@@ -2,7 +2,7 @@
 
 LegionIO LLM provider extension for OpenAI.
 
-This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm >= 0.4.0` for shared provider-neutral routing, response normalization, fleet envelopes, and schema primitives.
+This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm >= 0.4.3` for shared provider-neutral routing, response normalization, fleet envelopes, fleet responder execution, and schema primitives.
 
 Load it with `require 'legion/extensions/llm/openai'`.
 
@@ -85,8 +85,7 @@ end
 
 | Gem | Purpose |
 |-----|---------|
-| `lex-llm` (>= 0.4.0) | Shared provider contract, response normalization, fleet settings, routing |
-| `legion-llm` (>= 0.9.0) | Routing and shared fleet worker execution |
+| `lex-llm` (>= 0.4.3) | Shared provider contract, response normalization, fleet settings, routing, and fleet responder execution |
 | `legion-transport` (>= 1.4.14) | AMQP subscriptions and replies |
 | `legion-json` (>= 1.2.1) | JSON serialization |
 | `legion-logging` (>= 1.3.2) | Structured logging via Helper |
