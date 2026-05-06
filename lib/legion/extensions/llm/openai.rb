@@ -28,7 +28,13 @@ module Legion
                 organization_id: nil,
                 project_id: nil
               },
-              usage: { inference: true, embedding: true, image: true },
+              usage: {
+                inference: true,
+                embedding: true,
+                moderation: true,
+                image: true,
+                audio: true
+              },
               limits: { concurrency: 4 },
               fleet: {
                 enabled: false,

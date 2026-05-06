@@ -26,6 +26,18 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(instance.dig(:fleet, :capabilities)).to eq(%i[chat stream_chat embed image])
   end
 
+  it 'advertises all supported OpenAI usage families' do
+    instance = described_class.default_settings.dig(:instances, :default)
+
+    expect(instance[:usage]).to eq(
+      inference: true,
+      embedding: true,
+      moderation: true,
+      image: true,
+      audio: true
+    )
+  end
+
   it 'does not register the provider in the deprecated Provider.providers hash' do
     # The old Provider.register call has been removed; loading the gem should
     # not add an entry to the deprecated providers hash.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.5 - 2026-05-06
+
+- Advertise OpenAI moderation and audio usage in the default provider instance settings.
+- Refresh README architecture and verification guidance for the shared `lex-llm` registry and fleet responder boundary.
+
 ## 0.3.4 - 2026-05-06
 
 - Use the shared `lex-llm` fleet provider responder helper for provider-owned fleet workers.
