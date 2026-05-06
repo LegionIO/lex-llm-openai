@@ -138,6 +138,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
                                   openai_project_id: 'proj-123',
                                   tier: :frontier)
       expect(instance).not_to have_key(:base_url)
+      expect(instance).not_to have_key(:api_key)
+      expect(instance).not_to have_key(:organization_id)
+      expect(instance).not_to have_key(:project_id)
     end
 
     it 'normalizes named instances to OpenAI provider config keys' do

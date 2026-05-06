@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6 - 2026-05-06
+
+- Load provider-owned fleet actors through the LegionIO subscription base and the canonical OpenAI provider root.
+- Keep fleet runners anchored on the provider root namespace so provider constants and instance discovery are always loaded.
+- Strip temporary generic API key, organization, and project fields from discovered OpenAI instance configs after credential deduplication.
+- Gate release publishing on the shared security workflow.
+
 ## 0.3.5 - 2026-05-06
 
 - Advertise OpenAI moderation and audio usage in the default provider instance settings.

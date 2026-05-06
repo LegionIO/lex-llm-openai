@@ -63,8 +63,10 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     it 'returns a :settings instance with merged config and tier :frontier' do
       result = discover[:settings]
       expect(result[:openai_api_key]).to eq('settings-key')
-      expect(result[:organization_id]).to eq('org-123')
+      expect(result[:openai_organization_id]).to eq('org-123')
       expect(result[:tier]).to eq(:frontier)
+      expect(result).not_to have_key(:api_key)
+      expect(result).not_to have_key(:organization_id)
     end
   end
 

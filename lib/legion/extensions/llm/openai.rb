@@ -57,23 +57,25 @@ module Legion
 
           # 1. OPENAI_API_KEY environment variable
           env_key = CredentialSources.env('OPENAI_API_KEY')
-          candidates[:env] = { openai_api_key: env_key, tier: :frontier } if env_key
+          candidates[:env] = { api_key: env_key, openai_api_key: env_key, tier: :frontier } if env_key
 
           # 2. CODEX_API_KEY environment variable
           codex_env_key = CredentialSources.env('CODEX_API_KEY')
-          candidates[:codex_env] = { openai_api_key: codex_env_key, tier: :frontier } if codex_env_key
+          if codex_env_key
+            candidates[:codex_env] = { api_key: codex_env_key, openai_api_key: codex_env_key, tier: :frontier }
+          end
 
           # 3. Codex bearer token (~/.codex/auth.json chatgpt mode)
           codex_tok = CredentialSources.codex_token
-          candidates[:codex] = { openai_api_key: codex_tok, tier: :frontier } if codex_tok
+          candidates[:codex] = { api_key: codex_tok, openai_api_key: codex_tok, tier: :frontier } if codex_tok
 
           # 4. Codex OPENAI_API_KEY from ~/.codex/auth.json
           codex_key = CredentialSources.codex_openai_key
-          candidates[:codex_key] = { openai_api_key: codex_key, tier: :frontier } if codex_key
+          candidates[:codex_key] = { api_key: codex_key, openai_api_key: codex_key, tier: :frontier } if codex_key
 
           # 5. Claude config openaiApiKey
           claude_key = CredentialSources.claude_config_value(:openaiApiKey)
-          candidates[:claude] = { openai_api_key: claude_key, tier: :frontier } if claude_key
+          candidates[:claude] = { api_key: claude_key, openai_api_key: claude_key, tier: :frontier } if claude_key
 
           # 6. Extension settings
           settings_config = CredentialSources.setting(:extensions, :llm, :openai)
@@ -81,6 +83,7 @@ module Legion
             settings_key = settings_config[:api_key] || settings_config['api_key']
             if settings_key
               candidates[:settings] = normalize_instance_config(settings_config).merge(
+                api_key: settings_key,
                 openai_api_key: settings_key,
                 tier: :frontier
               )
@@ -91,11 +94,14 @@ module Legion
           settings_instances(settings_config).each do |name, config|
             next unless config.is_a?(Hash)
 
-            candidates[name.to_sym] = normalize_instance_config(config).merge(tier: :frontier)
+            normalized = normalize_instance_config(config)
+            dedup_key = normalized[:openai_api_key]
+            normalized[:api_key] = dedup_key if dedup_key
+            candidates[name.to_sym] = normalized.merge(tier: :frontier)
           end
 
           # 8. Dedup
-          CredentialSources.dedup_credentials(candidates)
+          CredentialSources.dedup_credentials(candidates).transform_values { |config| sanitize_instance_config(config) }
         end
 
         def self.settings_instances(config)
@@ -107,13 +113,17 @@ module Legion
 
         def self.normalize_instance_config(config) # rubocop:disable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
           normalized = config.to_h.transform_keys { |key| key.respond_to?(:to_sym) ? key.to_sym : key }
-          normalized[:openai_api_key] ||= normalized[:api_key]
+          normalized[:openai_api_key] ||= normalized.delete(:api_key)
           normalized[:openai_api_base] ||= normalized.delete(:base_url)
           normalized[:openai_api_base] ||= normalized.delete(:api_base)
           normalized[:openai_api_base] ||= normalized.delete(:endpoint)
-          normalized[:openai_organization_id] ||= normalized[:organization_id]
-          normalized[:openai_project_id] ||= normalized[:project_id]
+          normalized[:openai_organization_id] ||= normalized.delete(:organization_id)
+          normalized[:openai_project_id] ||= normalized.delete(:project_id)
           normalized.compact.except(:instances)
+        end
+
+        def self.sanitize_instance_config(config)
+          config.except(:api_key, :organization_id, :project_id)
         end
 
         Legion::Extensions::Llm::Configuration.register_provider_options(Provider.configuration_options) if
