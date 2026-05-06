@@ -15,15 +15,27 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     Legion::Extensions::Llm.config.openai_use_system_role = nil
   end
 
-  it 'exposes flat provider defaults without legacy provider_settings' do
+  it 'exposes provider defaults through the shared provider settings shape' do
     settings = described_class.default_settings
+    instance = settings.dig(:instances, :default)
 
-    expect(settings[:enabled]).to be false
-    expect(settings[:default_model]).to eq('gpt-4o')
-    expect(settings[:api_key]).to be_nil
-    expect(settings[:instances]).to eq({})
-    expect(settings).not_to have_key(:provider_family)
-    expect(settings).not_to have_key(:fleet)
+    expect(settings[:enabled]).to be true
+    expect(settings[:provider_family]).to eq(:openai)
+    expect(instance[:default_model]).to eq('gpt-4o')
+    expect(instance.dig(:credentials, :api_key)).to eq('env://OPENAI_API_KEY')
+    expect(instance.dig(:fleet, :capabilities)).to eq(%i[chat stream_chat embed image])
+  end
+
+  it 'advertises all supported OpenAI usage families' do
+    instance = described_class.default_settings.dig(:instances, :default)
+
+    expect(instance[:usage]).to eq(
+      inference: true,
+      embedding: true,
+      moderation: true,
+      image: true,
+      audio: true
+    )
   end
 
   it 'does not register the provider in the deprecated Provider.providers hash' do
@@ -99,6 +111,49 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   it 'does not ship a local transport directory' do
     expect(described_class.const_defined?(:Transport, false)).to be false
+  end
+
+  describe '.discover_instances' do
+    before do
+      allow(Legion::Extensions::Llm::CredentialSources).to receive_messages(
+        env: nil,
+        codex_token: nil,
+        codex_openai_key: nil,
+        claude_config_value: nil,
+        setting: nil
+      )
+    end
+
+    it 'normalizes generic extension settings to provider config keys' do # rubocop:disable RSpec/ExampleLength
+      allow(Legion::Extensions::Llm::CredentialSources).to receive(:setting)
+        .with(:extensions, :llm, :openai)
+        .and_return({ api_key: 'sk-settings', base_url: 'https://openai.example/v1',
+                      organization_id: 'org-123', project_id: 'proj-123' })
+
+      instance = described_class.discover_instances[:settings]
+
+      expect(instance).to include(openai_api_key: 'sk-settings',
+                                  openai_api_base: 'https://openai.example/v1',
+                                  openai_organization_id: 'org-123',
+                                  openai_project_id: 'proj-123',
+                                  tier: :frontier)
+      expect(instance).not_to have_key(:base_url)
+      expect(instance).not_to have_key(:api_key)
+      expect(instance).not_to have_key(:organization_id)
+      expect(instance).not_to have_key(:project_id)
+    end
+
+    it 'normalizes named instances to OpenAI provider config keys' do
+      allow(Legion::Extensions::Llm::CredentialSources).to receive(:setting)
+        .with(:extensions, :llm, :openai)
+        .and_return({ instances: { local: { api_key: 'sk-local', endpoint: 'http://localhost:8000/v1' } } })
+
+      expect(described_class.discover_instances[:local]).to include(
+        openai_api_key: 'sk-local',
+        openai_api_base: 'http://localhost:8000/v1',
+        tier: :frontier
+      )
+    end
   end
 
   def endpoint_helpers

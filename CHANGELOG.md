@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.6 - 2026-05-06
+
+- Load provider-owned fleet actors through the LegionIO subscription base and the canonical OpenAI provider root.
+- Keep fleet runners anchored on the provider root namespace so provider constants and instance discovery are always loaded.
+- Strip temporary generic API key, organization, and project fields from discovered OpenAI instance configs after credential deduplication.
+- Gate release publishing on the shared security workflow.
+
+## 0.3.5 - 2026-05-06
+
+- Advertise OpenAI moderation and audio usage in the default provider instance settings.
+- Refresh README architecture and verification guidance for the shared `lex-llm` registry and fleet responder boundary.
+
+## 0.3.4 - 2026-05-06
+
+- Use the shared `lex-llm` fleet provider responder helper for provider-owned fleet workers.
+- Remove the runtime `legion-llm` dependency and require `lex-llm >= 0.4.3` for responder-side fleet execution.
+
+## 0.3.3 - 2026-05-06
+
+- Remove require-time provider self-registration; `legion-llm` now owns adapter creation and registry writes from loaded provider discovery metadata.
+- Bump dependency floors to `lex-llm >= 0.4.1` and `legion-llm >= 0.9.1`.
+
+## 0.3.2 - 2026-05-06
+
+- Add provider contract specs for the shared keyword-only `lex-llm` provider API.
+- Move OpenAI defaults back to `Legion::Extensions::Llm.provider_settings` with credentials and instance-level fleet responder settings.
+- Remove `gateways` discovery; OpenAI-compatible targets are now named provider instances.
+- Add provider-owned fleet responder actor and runner backed by `legion-llm` fleet policy execution.
+- Bump the transport dependency floor to `legion-transport >= 1.4.14`.
+
+## 0.3.1 - 2026-05-03
+
+- Normalize generic settings keys to OpenAI provider config keys during extension and gateway instance discovery.
+
 ## 0.3.0 - 2026-05-01
 
 - Add auto-discovery via CredentialSources and AutoRegistration from lex-llm 0.3.0

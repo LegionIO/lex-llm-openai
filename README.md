@@ -2,13 +2,13 @@
 
 LegionIO LLM provider extension for OpenAI.
 
-This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm` for shared provider-neutral routing, fleet, and schema primitives.
+This gem lives under `Legion::Extensions::Llm::Openai` and depends on `lex-llm >= 0.4.3` for shared provider-neutral routing, response normalization, fleet envelopes, fleet responder execution, and schema primitives.
 
 Load it with `require 'legion/extensions/llm/openai'`.
 
 ## What It Provides
 
-- `Legion::Extensions::Llm::Provider` registration as `:openai`
+- OpenAI provider discovery under the `:openai` provider family
 - Chat completions via `POST /v1/chat/completions`
 - Streaming chat completions (same endpoint, `stream: true`)
 - Model discovery via `GET /v1/models`
@@ -24,27 +24,29 @@ Load it with `require 'legion/extensions/llm/openai'`.
 - Normalized chat, embedding, moderation, image, and audio capability mapping for discovered models
 - Shared fleet/default settings via `Legion::Extensions::Llm.provider_settings`
 - Best-effort `llm.registry` availability event publishing for discovered models
+- Provider-owned fleet request handling through `Legion::Extensions::Llm::Fleet::ProviderResponder`
 
 ## Architecture
 
 ```
 Legion::Extensions::Llm::Openai
-├── Provider                              # OpenAI provider implementation (chat, models, embeddings, etc.)
-│   └── Capabilities                      # Model family capability predicates
-├── RegistryPublisher                     # Async llm.registry event publisher
-├── RegistryEventBuilder                  # Sanitized registry event envelope builder
-└── Transport
-    ├── Exchanges::LlmRegistry            # Topic exchange for llm.registry
-    └── Messages::RegistryEvent           # AMQP message for registry events
+|-- Provider                              # OpenAI provider implementation (chat, models, embeddings, etc.)
+|   `-- Capabilities                      # Model family capability predicates
+|-- Actor::FleetWorker                    # Subscription actor gate for provider-owned fleet requests
+`-- Runners::FleetWorker                  # Delegates request execution to lex-llm ProviderResponder
 ```
+
+Registry publishing, event envelope construction, fleet protocol handling, and fleet response/error transport live in `lex-llm`. This provider intentionally does not depend on `legion-llm` at runtime.
 
 ## Observability
 
-All classes include `Legion::Logging::Helper` (when available) providing:
+The provider and root extension namespace use `Legion::Logging::Helper` for:
 
 - Structured `handle_exception` calls on every rescue block
-- Info-level action logging for provider registration, model listing, model retrieval, and registry publishing
+- Info-level action logging for model listing, model retrieval, and registry publishing
 - Automatic log segment derivation and component type tagging
+
+Fleet actor and runner code stays thin and delegates execution, ack/reject handling, and response publication to the shared `lex-llm` responder helper.
 
 ## Defaults
 
@@ -85,18 +87,38 @@ end
 
 | Gem | Purpose |
 |-----|---------|
-| `lex-llm` (>= 0.1.5) | Shared provider contract, fleet settings, routing |
+| `lex-llm` (>= 0.4.3) | Shared provider contract, response normalization, fleet settings, routing, and fleet responder execution |
+| `legion-transport` (>= 1.4.14) | AMQP subscriptions and replies |
 | `legion-json` (>= 1.2.1) | JSON serialization |
 | `legion-logging` (>= 1.3.2) | Structured logging via Helper |
 | `legion-settings` (>= 1.3.14) | Configuration management |
+
+## Fleet Responder
+
+Provider instances can opt in to consuming Legion LLM fleet requests. The provider-owned fleet actor only starts when at least one configured instance enables `respond_to_requests`, and the runner delegates execution to `Legion::Extensions::Llm::Fleet::ProviderResponder` from `lex-llm`.
+
+```yaml
+extensions:
+  llm:
+    openai:
+      instances:
+        local:
+          fleet:
+            enabled: true
+            respond_to_requests: true
+            capabilities:
+              - chat
+              - stream_chat
+              - embed
+              - image
+```
 
 ## Development
 
 ```bash
 bundle install
-bundle exec rspec --format progress   # all pass
-bundle exec rubocop -A                # auto-fix
-bundle exec rubocop                   # lint check (0 offenses)
+bundle exec rspec --format json --out tmp/rspec_results.json --format progress --out tmp/rspec_progress.txt
+bundle exec rubocop -A
 ```
 
 ## License

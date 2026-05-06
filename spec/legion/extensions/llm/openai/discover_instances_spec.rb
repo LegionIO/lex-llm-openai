@@ -63,8 +63,10 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     it 'returns a :settings instance with merged config and tier :frontier' do
       result = discover[:settings]
       expect(result[:openai_api_key]).to eq('settings-key')
-      expect(result[:organization_id]).to eq('org-123')
+      expect(result[:openai_organization_id]).to eq('org-123')
       expect(result[:tier]).to eq(:frontier)
+      expect(result).not_to have_key(:api_key)
+      expect(result).not_to have_key(:organization_id)
     end
   end
 
@@ -76,36 +78,38 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     end
   end
 
-  context 'with gateway instances' do
-    before { stub_gateways(litellm: { openai_api_key: 'gw-key', openai_api_base: 'http://litellm:4000' }) }
+  context 'with named settings instances' do
+    before { stub_settings(instances: { litellm: { openai_api_key: 'gw-key', openai_api_base: 'http://litellm:4000' } }) }
 
-    it 'returns each gateway with tier :openai_compat' do
+    it 'returns each instance with tier :frontier' do
       result = discover[:litellm]
       expect(result[:openai_api_key]).to eq('gw-key')
       expect(result[:openai_api_base]).to eq('http://litellm:4000')
-      expect(result[:tier]).to eq(:openai_compat)
+      expect(result[:tier]).to eq(:frontier)
     end
   end
 
-  context 'with multiple gateways' do
+  context 'with multiple named settings instances' do
     before do
-      stub_gateways(
-        gw_a: { openai_api_key: 'key-a', openai_api_base: 'http://a:4000' },
-        gw_b: { openai_api_key: 'key-b', openai_api_base: 'http://b:4000' }
+      stub_settings(
+        instances: {
+          gw_a: { openai_api_key: 'key-a', openai_api_base: 'http://a:4000' },
+          gw_b: { openai_api_key: 'key-b', openai_api_base: 'http://b:4000' }
+        }
       )
     end
 
-    it 'returns all gateways' do
+    it 'returns all named instances' do
       expect(discover.keys).to include(:gw_a, :gw_b)
-      expect(discover[:gw_a][:tier]).to eq(:openai_compat)
-      expect(discover[:gw_b][:tier]).to eq(:openai_compat)
+      expect(discover[:gw_a][:tier]).to eq(:frontier)
+      expect(discover[:gw_b][:tier]).to eq(:frontier)
     end
   end
 
-  context 'with gateways containing non-hash entries' do
-    before { stub_gateways(valid: { openai_api_key: 'key' }, invalid: 'not-a-hash') }
+  context 'with named settings instances containing non-hash entries' do
+    before { stub_settings(instances: { valid: { openai_api_key: 'key' }, invalid: 'not-a-hash' }) }
 
-    it 'skips non-hash gateway entries' do
+    it 'skips non-hash instance entries' do
       expect(discover).to have_key(:valid)
       expect(discover).not_to have_key(:invalid)
     end
@@ -130,8 +134,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
       stub_env('CODEX_API_KEY', 'codex-env-key')
       allow(credential_sources).to receive_messages(codex_token: 'codex-tok', codex_openai_key: 'codex-oai-key')
       stub_claude_config('claude-key')
-      stub_settings(api_key: 'settings-key')
-      stub_gateways(my_gw: { openai_api_key: 'gw-key' })
+      stub_settings(api_key: 'settings-key', instances: { my_gw: { openai_api_key: 'gw-key' } })
     end
 
     it 'returns all discovered instances' do
@@ -159,11 +162,5 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     allow(credential_sources).to receive(:setting)
       .with(:extensions, :llm, :openai)
       .and_return(config)
-  end
-
-  def stub_gateways(gateways)
-    allow(credential_sources).to receive(:setting)
-      .with(:extensions, :llm, :openai, :gateways)
-      .and_return(gateways)
   end
 end
