@@ -180,7 +180,7 @@ module Legion
             raise
           end
 
-          def list_models
+          def list_models(**)
             log.info('Listing OpenAI models')
             raw = connection.get(models_url)
             models = build_model_infos(raw.body)
