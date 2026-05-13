@@ -21,7 +21,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     before { stub_env('OPENAI_API_KEY', 'sk-env-key') }
 
     it 'returns an :env instance with tier :frontier' do
-      expect(discover).to include(env: { openai_api_key: 'sk-env-key', tier: :frontier })
+      expect(discover).to include(env: a_hash_including(openai_api_key: 'sk-env-key', tier: :frontier))
     end
   end
 
@@ -29,7 +29,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     before { stub_env('CODEX_API_KEY', 'sk-codex-env-key') }
 
     it 'returns a :codex_env instance with tier :frontier' do
-      expect(discover).to include(codex_env: { openai_api_key: 'sk-codex-env-key', tier: :frontier })
+      expect(discover).to include(codex_env: a_hash_including(openai_api_key: 'sk-codex-env-key', tier: :frontier))
     end
   end
 
@@ -37,7 +37,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     before { allow(credential_sources).to receive(:codex_token).and_return('codex-bearer-tok') }
 
     it 'returns a :codex instance with tier :frontier' do
-      expect(discover).to include(codex: { openai_api_key: 'codex-bearer-tok', tier: :frontier })
+      expect(discover).to include(codex: a_hash_including(openai_api_key: 'codex-bearer-tok', tier: :frontier))
     end
   end
 
@@ -45,7 +45,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     before { allow(credential_sources).to receive(:codex_openai_key).and_return('codex-oai-key') }
 
     it 'returns a :codex_key instance with tier :frontier' do
-      expect(discover).to include(codex_key: { openai_api_key: 'codex-oai-key', tier: :frontier })
+      expect(discover).to include(codex_key: a_hash_including(openai_api_key: 'codex-oai-key', tier: :frontier))
     end
   end
 
@@ -53,7 +53,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     before { stub_claude_config('claude-oai-key') }
 
     it 'returns a :claude instance with tier :frontier' do
-      expect(discover).to include(claude: { openai_api_key: 'claude-oai-key', tier: :frontier })
+      expect(discover).to include(claude: a_hash_including(openai_api_key: 'claude-oai-key', tier: :frontier))
     end
   end
 

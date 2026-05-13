@@ -19,42 +19,50 @@ module Legion
             'gpt-4o' => {
               capabilities: %i[completion streaming function_calling vision structured_output],
               modalities_input: %w[text image audio],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 128_000
             },
             'gpt-4.1' => {
               capabilities: %i[completion streaming function_calling vision structured_output],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 1_047_576
             },
             'gpt-4' => {
               capabilities: %i[completion streaming function_calling vision],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 128_000
             },
             'gpt-5' => {
               capabilities: %i[completion streaming function_calling vision structured_output reasoning],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 1_047_576
             },
             'o4' => {
               capabilities: %i[completion streaming function_calling vision reasoning],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 200_000
             },
             'o3' => {
               capabilities: %i[completion streaming function_calling vision reasoning],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 200_000
             },
             'o1' => {
               capabilities: %i[completion streaming function_calling vision reasoning],
               modalities_input: %w[text image],
-              modalities_output: %w[text]
+              modalities_output: %w[text],
+              context_window: 200_000
             },
             'text-embedding-' => {
               capabilities: %i[embedding],
               modalities_input: %w[text],
-              modalities_output: %w[embeddings]
+              modalities_output: %w[embeddings],
+              context_window: 8_191
             },
             'omni-moderation' => {
               capabilities: %i[moderation],
@@ -199,12 +207,15 @@ module Legion
             body.fetch('data', []).map do |raw_model|
               id = raw_model.fetch('id')
               cap_entry = capability_entry_for(id)
+              detail = model_detail(id)
+              ctx = detail&.dig(:context_window) || cap_entry[:context_window]
 
               Legion::Extensions::Llm::Model::Info.new(
                 id: id,
                 name: id,
                 provider: :openai,
                 capabilities: cap_entry[:capabilities],
+                context_length: ctx,
                 modalities_input: cap_entry[:modalities_input],
                 modalities_output: cap_entry[:modalities_output],
                 metadata: {
@@ -220,12 +231,17 @@ module Legion
               return entry if model_id.start_with?(prefix)
             end
 
-            # Fallback for unknown models: assume chat-capable
             {
               capabilities: %i[completion streaming],
               modalities_input: %w[text],
               modalities_output: %w[text]
             }
+          end
+
+          def fetch_model_detail(model_name)
+            entry = capability_entry_for(model_name)
+            ctx = entry[:context_window]
+            ctx ? { context_window: ctx } : nil
           end
 
           def model_created_at(value)
