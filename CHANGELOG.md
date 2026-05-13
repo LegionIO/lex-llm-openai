@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.9 - 2026-05-13
+
+- Change `default_model` from `gpt-4o` to `gpt-5.5` in provider default settings and instance discovery fallback.
+- Inject `default_model` into all discovered provider instances so every instance has an explicit model default.
+- Add `context_window` to all `CAPABILITY_MAP` entries (gpt-4o=128K, gpt-4.1/gpt-5=1M, o3/o4/o1=200K, text-embedding=8K).
+- Override `fetch_model_detail` to return `context_window` from the capability map instead of issuing a live API call.
+- Use `model_detail` in `build_model_infos` to populate `context_length` from the cached capability map entry.
+
 ## 0.3.8 - 2026-05-13
 
 - Route OpenAI fleet runner and actor diagnostics through `Legion::Logging::Helper` with debug-level request and enablement context.

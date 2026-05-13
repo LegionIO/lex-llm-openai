@@ -21,7 +21,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
     expect(settings[:enabled]).to be true
     expect(settings[:provider_family]).to eq(:openai)
-    expect(instance[:default_model]).to eq('gpt-4o')
+    expect(instance[:default_model]).to eq('gpt-5.5')
     expect(instance.dig(:credentials, :api_key)).to eq('env://OPENAI_API_KEY')
     expect(instance.dig(:fleet, :capabilities)).to eq(%i[chat stream_chat embed image])
   end

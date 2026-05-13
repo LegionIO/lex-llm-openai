@@ -20,7 +20,7 @@ module Legion
             family: PROVIDER_FAMILY,
             instance: {
               endpoint: 'https://api.openai.com',
-              default_model: 'gpt-4o',
+              default_model: 'gpt-5.5',
               tier: :frontier,
               transport: :http,
               credentials: {
@@ -101,9 +101,11 @@ module Legion
             candidates[name.to_sym] = normalized.merge(tier: :frontier)
           end
 
-          # 8. Dedup
+          # 8. Dedup + inject default_model
           discovered = CredentialSources.dedup_credentials(candidates).transform_values do |config|
-            sanitize_instance_config(config)
+            sanitized = sanitize_instance_config(config)
+            sanitized[:default_model] ||= 'gpt-5.5'
+            sanitized
           end
           instance_names = discovered.keys.sort_by(&:to_s).join(', ')
           log.debug { "Discovered #{discovered.size} OpenAI provider instance candidate(s): #{instance_names}" }
