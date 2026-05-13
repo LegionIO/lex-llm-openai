@@ -10,9 +10,16 @@ module Legion
         module Runners
           # Runner entrypoint for OpenAI fleet request execution.
           module FleetWorker
+            extend Legion::Logging::Helper
+
             module_function
 
             def handle_fleet_request(payload, delivery: nil, properties: nil)
+              log.debug do
+                "Handling OpenAI fleet request: request_id=#{payload_value(payload, :request_id) || 'unknown'}, " \
+                  "provider_instance=#{payload_value(payload, :provider_instance) || 'default'}"
+              end
+
               Legion::Extensions::Llm::Fleet::ProviderResponder.call(
                 payload: payload,
                 provider_family: Openai::PROVIDER_FAMILY,
@@ -21,6 +28,15 @@ module Legion
                 delivery: delivery,
                 properties: properties
               )
+            rescue StandardError => e
+              handle_exception(e, level: :error, handled: true, operation: 'openai.fleet_worker.handle_request')
+              raise
+            end
+
+            def payload_value(payload, key)
+              return unless payload.respond_to?(:[])
+
+              payload[key] || payload[key.to_s]
             end
           end
         end

@@ -172,7 +172,7 @@ module Legion
           def images_url(with: nil, mask: nil) = super
 
           def retrieve_model(model)
-            log.info("Retrieving model: #{model}")
+            log.debug { "Retrieving OpenAI model: #{model}" }
             connection.get("#{models_url}/#{model}").body
           rescue StandardError => e
             handle_exception(e, level: :error, handled: true,
@@ -181,10 +181,10 @@ module Legion
           end
 
           def list_models(**)
-            log.info('Listing OpenAI models')
+            log.debug('Listing OpenAI models')
             raw = connection.get(models_url)
             models = build_model_infos(raw.body)
-            log.info("Discovered #{models.size} OpenAI models")
+            log.debug { "Discovered #{models.size} OpenAI models; publishing registry availability" }
             self.class.registry_publisher.publish_models_async(models, readiness: readiness(live: false))
             models
           rescue StandardError => e

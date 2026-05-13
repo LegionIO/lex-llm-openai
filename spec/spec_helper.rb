@@ -1,7 +1,10 @@
 # frozen_string_literal: true
 
 require 'bundler/setup'
+require 'legion/logging'
 require 'legion/extensions/llm'
+
+Legion::Logging.setup(level: 'fatal', log_file: File::NULL, log_stdout: false, async: false)
 
 # register_provider_options is defined in the full runtime but not in the
 # standalone Configuration class shipped with lex-llm.  Patch it in so the
