@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.8 - 2026-05-13
+
+- Route OpenAI fleet runner and actor diagnostics through `Legion::Logging::Helper` with debug-level request and enablement context.
+- Report optional actor subscription load failures through `handle_exception` instead of raw warning output.
+- Move routine OpenAI model discovery telemetry to debug-level logging while keeping failure handling structured.
+
 ## 0.3.7 - 2026-05-08
 
 - Accept keyword arguments in `list_models` to match the base provider contract called by `discover_offerings`.

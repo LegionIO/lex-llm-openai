@@ -53,6 +53,7 @@ module Legion
         end
 
         def self.discover_instances # rubocop:disable Metrics/AbcSize,Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity
+          log.debug('Discovering OpenAI provider instances')
           candidates = {}
 
           # 1. OPENAI_API_KEY environment variable
@@ -101,7 +102,12 @@ module Legion
           end
 
           # 8. Dedup
-          CredentialSources.dedup_credentials(candidates).transform_values { |config| sanitize_instance_config(config) }
+          discovered = CredentialSources.dedup_credentials(candidates).transform_values do |config|
+            sanitize_instance_config(config)
+          end
+          instance_names = discovered.keys.sort_by(&:to_s).join(', ')
+          log.debug { "Discovered #{discovered.size} OpenAI provider instance candidate(s): #{instance_names}" }
+          discovered
         end
 
         def self.settings_instances(config)
