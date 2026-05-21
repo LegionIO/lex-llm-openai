@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.10 - 2026-05-21
+
+- api_base reads from settings[:endpoint] fallback
+- Identity headers included via base provider
+
+
 ## 0.3.9 - 2026-05-13
 
 - Change `default_model` from `gpt-4o` to `gpt-5.5` in provider default settings and instance discovery fallback.
