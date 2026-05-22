@@ -161,6 +161,10 @@ module Legion
 
           def stream_usage_supported? = true
 
+          def settings
+            Openai.default_settings
+          end
+
           def api_base
             config.openai_api_base || settings[:endpoint] || 'https://api.openai.com'
           end
