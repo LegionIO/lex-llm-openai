@@ -161,16 +161,20 @@ module Legion
 
           def stream_usage_supported? = true
 
+          def settings
+            Openai.default_settings
+          end
+
           def api_base
-            config.openai_api_base || 'https://api.openai.com'
+            config.openai_api_base || settings[:endpoint] || 'https://api.openai.com'
           end
 
           def headers
-            {
+            identity_headers.merge({
               'Authorization' => "Bearer #{config.openai_api_key}",
               'OpenAI-Organization' => config.openai_organization_id,
               'OpenAI-Project' => config.openai_project_id
-            }.compact
+            }.compact)
           end
 
           def chat_url = completion_url
