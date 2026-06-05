@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.11 - 2026-06-05
+
+- Fix missing top-level documentation comment in `DiscoveryRefresh` actor (RuboCop `Style/Documentation`).
+
 ## 0.3.10 - 2026-05-21
 
 - api_base reads from settings[:endpoint] fallback
