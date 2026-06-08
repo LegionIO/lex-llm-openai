@@ -13,6 +13,7 @@ module Legion
     module Llm
       module Openai
         module Actor
+          # Periodically refreshes the OpenAI model discovery cache.
           class DiscoveryRefresh < Legion::Extensions::Actors::Every
             include Legion::Logging::Helper
 
