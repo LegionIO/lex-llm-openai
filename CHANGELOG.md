@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.3.11 - 2026-06-05
+## 0.4.1 — 2026-06-10
+
+- Canonical translator (`Translator`): `render_request`, `parse_response`, `parse_chunk`, `capabilities` — provider-boundary contract per N×N routing Amendment A
+- Conformance kit integration — loads shared `it_behaves_like 'a canonical provider translator` from `lex-llm` gem spec/ per B1b consumer pattern (54 kit scenarios passing)
+- `Provider#translator` exposes a lazy `Translator` instance; provider becomes transport + config
+- G18 parameter mapping: max_tokens, temperature, top_p, stop_sequences/stop, seed, penalties, response_format mapped 1:1; top_k dropped with debug log; max_thinking_tokens → thinking config
+- G18 stop_reason matrix: stop → end_turn, tool_calls → tool_use, length → max_tokens, content_filter → content_filter
+- Require `lex-llm >= 0.5.0` (canonical types, conformance kit, Zeitwerk removal)
+
+## 0.3.11 — 2026-06-05
 
 - Fix missing top-level documentation comment in `DiscoveryRefresh` actor (RuboCop `Style/Documentation`).
 
