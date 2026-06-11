@@ -166,7 +166,13 @@ module Legion
           end
 
           def api_base
-            config.openai_api_base || settings[:endpoint] || 'https://api.openai.com'
+            config.openai_api_base || settings.dig(:instances, :default, :endpoint) || 'https://api.openai.com'
+          end
+
+          # Canonical translator instance - the provider boundary contract.
+          # Created lazily; delegate translation to the Translator class.
+          def translator
+            @translator ||= Translator.new(api_base: api_base, headers: headers)
           end
 
           def headers

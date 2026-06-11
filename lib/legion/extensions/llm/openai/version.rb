@@ -4,7 +4,7 @@ module Legion
   module Extensions
     module Llm
       module Openai
-        VERSION = '0.3.11'
+        VERSION = '0.4.0'
       end
     end
   end

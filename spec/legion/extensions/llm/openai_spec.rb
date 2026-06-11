@@ -124,7 +124,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       )
     end
 
-    it 'normalizes generic extension settings to provider config keys' do # rubocop:disable RSpec/ExampleLength
+    it 'normalizes generic extension settings to provider config keys' do
       allow(Legion::Extensions::Llm::CredentialSources).to receive(:setting)
         .with(:extensions, :llm, :openai)
         .and_return({ api_key: 'sk-settings', base_url: 'https://openai.example/v1',

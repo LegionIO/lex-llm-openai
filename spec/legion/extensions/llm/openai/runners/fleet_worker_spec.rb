@@ -17,7 +17,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Runners::FleetWorker do
     expect(described_class.singleton_class.ancestors).to include(Legion::Logging::Helper)
   end
 
-  it 'delegates fleet execution to the shared lex-llm responder helper' do # rubocop:disable RSpec/ExampleLength
+  it 'delegates fleet execution to the shared lex-llm responder helper' do
     allow(Legion::Extensions::Llm::Openai).to receive(:discover_instances).and_return(instances)
     allow(Legion::Extensions::Llm::Fleet::ProviderResponder).to receive(:call).and_return(:ok)
 
