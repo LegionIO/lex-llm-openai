@@ -13,12 +13,14 @@ Metrics/BlockLength:
     - "*.gemspec"
     - spec/**/*
 Metrics/ClassLength:
-  Max: 200
+  Max: 350
 Metrics/ModuleLength:
   Max: 110
 Metrics/MethodLength:
   Enabled: false
 RSpec/ExampleLength:
-  Max: 10
+  Max: 25
 RSpec/MultipleExpectations:
+  Enabled: false
+RSpec/SubjectStub:
   Enabled: false

@@ -3,10 +3,9 @@
 source 'https://rubygems.org'
 
 group :test do
-  llm_base_path = ENV.fetch('LEX_LLM_PATH', File.expand_path('../lex-llm', __dir__))
   transport_path = ENV.fetch('LEGION_TRANSPORT_PATH', File.expand_path('../../legion-transport', __dir__))
   gem 'legion-transport', path: transport_path if File.directory?(transport_path)
-  gem 'lex-llm', path: llm_base_path if File.directory?(llm_base_path)
+  # lex-llm resolved from rubygems (>= 0.5.0) via gemspec - no local path dep
 end
 
 gemspec

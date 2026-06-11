@@ -2,6 +2,7 @@
 
 require 'legion/extensions/llm'
 require 'legion/extensions/llm/openai/provider'
+require 'legion/extensions/llm/openai/translator'
 require 'legion/extensions/llm/openai/version'
 
 module Legion
