@@ -287,7 +287,8 @@ module Legion
           end
 
           def render_openai_tool_calls(tool_calls)
-            Array(tool_calls).map do |tc|
+            tc_array = tool_calls.is_a?(Hash) ? tool_calls.values : Array(tool_calls)
+            tc_array.map do |tc|
               args = tc.arguments.is_a?(String) ? tc.arguments : Legion::JSON.generate(tc.arguments || {})
 
               {
@@ -353,7 +354,24 @@ module Legion
           def parse_usage(raw)
             return nil unless raw&.any?
 
-            Canonical::Usage.from_hash(raw)
+            normalized = raw.dup
+            normalized[:cache_read_tokens] ||= extract_nested_cached_tokens(raw)
+            normalized[:thinking_tokens] ||= extract_nested_reasoning_tokens(raw)
+            Canonical::Usage.from_hash(normalized)
+          end
+
+          def extract_nested_cached_tokens(raw)
+            raw.dig(:prompt_tokens_details, :cached_tokens) ||
+              raw.dig('prompt_tokens_details', 'cached_tokens') ||
+              raw.dig(:input_tokens_details, :cached_tokens) ||
+              raw.dig('input_tokens_details', 'cached_tokens')
+          end
+
+          def extract_nested_reasoning_tokens(raw)
+            raw.dig(:completion_tokens_details, :reasoning_tokens) ||
+              raw.dig('completion_tokens_details', 'reasoning_tokens') ||
+              raw.dig(:output_tokens_details, :reasoning_tokens) ||
+              raw.dig('output_tokens_details', 'reasoning_tokens')
           end
 
           def map_stop_reason(raw)
