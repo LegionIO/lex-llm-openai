@@ -17,43 +17,43 @@ module Legion
           # the raw /v1/models response.
           CAPABILITY_MAP = {
             'gpt-4o' => {
-              capabilities: %i[completion streaming function_calling vision structured_output],
+              capabilities: %i[completion streaming function_calling tools vision structured_output],
               modalities_input: %w[text image audio],
               modalities_output: %w[text],
               context_window: 128_000
             },
             'gpt-4.1' => {
-              capabilities: %i[completion streaming function_calling vision structured_output],
+              capabilities: %i[completion streaming function_calling tools vision structured_output],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 1_047_576
             },
             'gpt-4' => {
-              capabilities: %i[completion streaming function_calling vision],
+              capabilities: %i[completion streaming function_calling tools vision],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 128_000
             },
             'gpt-5' => {
-              capabilities: %i[completion streaming function_calling vision structured_output reasoning],
+              capabilities: %i[completion streaming function_calling tools vision structured_output reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 1_047_576
             },
             'o4' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
             },
             'o3' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
             },
             'o1' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
