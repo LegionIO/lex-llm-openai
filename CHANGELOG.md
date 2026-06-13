@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 — 2026-06-13
+
+- **Gemfile cleanup** — Remove local path overrides; dependencies resolve from gemspec via rubygems.
+- **Capabilities** — Add canonical `:tools` to capability declarations.
+- **Bug fix** — Extract nested `cached_tokens` from usage details (G26).
+- 153 examples, 0 failures; 16 files, 0 rubocop offenses.
+
 ## 0.4.1 — 2026-06-10
 
 - Canonical translator (`Translator`): `render_request`, `parse_response`, `parse_chunk`, `capabilities` — provider-boundary contract per N×N routing Amendment A
