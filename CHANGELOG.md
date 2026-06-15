@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3 - 2026-06-15
+
+- **CapabilityPolicy integration** — CAPABILITY_MAP fed as `:provider_catalog` source. Settings overrides at provider/instance/model level supported.
+
 ## 0.4.2 — 2026-06-13
 
 - **Gemfile cleanup** — Remove local path overrides; dependencies resolve from gemspec via rubygems.
