@@ -4,6 +4,7 @@ require 'legion/extensions/llm'
 require 'legion/extensions/llm/openai/provider'
 require 'legion/extensions/llm/openai/translator'
 require 'legion/extensions/llm/openai/version'
+require_relative 'openai/actors/discovery_refresh'
 
 module Legion
   module Extensions
@@ -40,10 +41,7 @@ module Legion
               fleet: {
                 enabled: false,
                 respond_to_requests: false,
-                capabilities: %i[chat stream_chat embed image],
-                lanes: [],
-                concurrency: 4,
-                queue_suffix: nil
+                capabilities: %i[chat stream_chat embed image]
               }
             }
           )
@@ -135,8 +133,7 @@ module Legion
           config.except(:api_key, :organization_id, :project_id)
         end
 
-        Legion::Extensions::Llm::Configuration.register_provider_options(Provider.configuration_options) if
-          Legion::Extensions::Llm::Configuration.respond_to?(:register_provider_options)
+        Legion::Extensions::Llm::Configuration.register_provider_options(Provider.configuration_options)
       end
     end
   end
