@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4 - 2026-06-16
+
+- dependency updates, code quality improvements
+
 ## 0.4.3 - 2026-06-15
 
 - **CapabilityPolicy integration** — CAPABILITY_MAP fed as `:provider_catalog` source. Settings overrides at provider/instance/model level supported.
