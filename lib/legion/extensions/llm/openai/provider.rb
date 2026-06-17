@@ -17,43 +17,43 @@ module Legion
           # the raw /v1/models response.
           CAPABILITY_MAP = {
             'gpt-4o' => {
-              capabilities: %i[completion streaming function_calling vision structured_output],
+              capabilities: %i[completion streaming function_calling tools vision structured_output],
               modalities_input: %w[text image audio],
               modalities_output: %w[text],
               context_window: 128_000
             },
             'gpt-4.1' => {
-              capabilities: %i[completion streaming function_calling vision structured_output],
+              capabilities: %i[completion streaming function_calling tools vision structured_output],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 1_047_576
             },
             'gpt-4' => {
-              capabilities: %i[completion streaming function_calling vision],
+              capabilities: %i[completion streaming function_calling tools vision],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 128_000
             },
             'gpt-5' => {
-              capabilities: %i[completion streaming function_calling vision structured_output reasoning],
+              capabilities: %i[completion streaming function_calling tools vision structured_output reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 1_047_576
             },
             'o4' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
             },
             'o3' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
             },
             'o1' => {
-              capabilities: %i[completion streaming function_calling vision reasoning],
+              capabilities: %i[completion streaming function_calling tools vision reasoning],
               modalities_input: %w[text image],
               modalities_output: %w[text],
               context_window: 200_000
@@ -211,6 +211,36 @@ module Legion
             raise
           end
 
+          def discover_offerings(live: false, **)
+            models = if live
+                       @cached_models = list_models
+                     else
+                       Array(@cached_models)
+                     end
+            offerings = models.filter_map { |model_info| offering_from_model(model_info) }
+            log.debug { "built #{offerings.size} OpenAI offering(s) live=#{live}" }
+            offerings
+          rescue StandardError => e
+            handle_exception(e, level: :warn, handled: true, operation: 'openai.discover_offerings')
+            []
+          end
+
+          # ── CapabilityPolicy integration ─────────────────────────────────
+          # Maps raw CAPABILITY_MAP symbol arrays to the boolean hash format
+          # that CapabilityPolicy.resolve expects as :provider_catalog.
+          CATALOG_CAPABILITY_MAPPING = {
+            streaming: :streaming,
+            function_calling: :tools,
+            tools: :tools,
+            vision: :vision,
+            structured_output: :structured_output,
+            reasoning: :thinking,
+            embedding: :embeddings,
+            image_generation: :image,
+            audio_transcription: :audio_transcription,
+            audio_generation: :audio_speech
+          }.freeze
+
           private
 
           def build_model_infos(body)
@@ -246,6 +276,115 @@ module Legion
               modalities_input: %w[text],
               modalities_output: %w[text]
             }
+          end
+
+          def offering_from_model(model_info)
+            policy = resolve_model_policy(model_info)
+
+            Legion::Extensions::Llm::Routing::ModelOffering.new(
+              offering_attrs_for(model_info, policy)
+            )
+          end
+
+          def resolve_model_policy(model_info)
+            catalog = capabilities_to_boolean_hash(capability_entry_for(model_info.id)[:capabilities])
+
+            Legion::Extensions::Llm::CapabilityPolicy.resolve(
+              real: {},
+              provider_catalog: catalog,
+              probe: {},
+              provider_envelope: {},
+              provider_config: provider_capability_config,
+              instance_config: instance_capability_config,
+              model_config: model_capability_config(model_info.id)
+            )
+          end
+
+          def offering_attrs_for(model_info, policy)
+            {
+              provider_family: :openai,
+              instance_id: config.respond_to?(:instance_id) ? config.instance_id : :default,
+              transport: :http,
+              tier: :frontier,
+              model: model_info.id,
+              canonical_model_alias: model_info.respond_to?(:name) ? model_info.name : nil,
+              model_family: infer_model_family(model_info.id),
+              usage_type: infer_usage_type(model_info),
+              capabilities: policy[:capabilities],
+              capability_sources: policy[:sources],
+              limits: { context_window: model_info.context_length }.compact,
+              metadata: { capability_sources: policy[:sources] }
+            }
+          end
+
+          def capabilities_to_boolean_hash(capability_symbols)
+            return {} unless capability_symbols.is_a?(Array)
+
+            result = {}
+            capability_symbols.each do |sym|
+              mapped = CATALOG_CAPABILITY_MAPPING[sym]
+              result[mapped] = true if mapped
+            end
+            result
+          end
+
+          def provider_capability_config
+            return {} unless defined?(Legion::Extensions::Llm::CredentialSources)
+
+            conf = Legion::Extensions::Llm::CredentialSources.setting(:extensions, :llm, :openai)
+            conf.is_a?(Hash) ? conf.to_h.except(:instances, 'instances') : {}
+          rescue StandardError => e
+            handle_exception(e, level: :debug, handled: true, operation: 'openai.provider_capability_config')
+            {}
+          end
+
+          def instance_capability_config
+            cfg = config
+            result = {}
+            %i[capabilities enable_thinking enable_tools enable_streaming enable_vision enable_embeddings
+               thinking_flag tools_flag streaming_flag vision_flag embedding_flag embeddings_flag
+               tool_flag images_flag image_flag].each do |key|
+              next unless cfg.respond_to?(key)
+
+              val = cfg.send(key)
+              result[key] = val unless val.nil?
+            rescue StandardError
+              next
+            end
+            result
+          end
+
+          def model_capability_config(model_id)
+            models_conf = fetch_models_config
+            return {} unless models_conf.respond_to?(:to_h)
+
+            models_conf.to_h[model_id.to_s] || models_conf.to_h[model_id.to_sym] || {}
+          rescue StandardError => e
+            handle_exception(e, level: :debug, handled: true, operation: 'openai.model_capability_config')
+            {}
+          end
+
+          def fetch_models_config
+            return config.models if config.respond_to?(:models)
+            return config[:models] if config.respond_to?(:[])
+
+            nil
+          end
+
+          def infer_model_family(model_id)
+            CAPABILITY_MAP.each_key do |prefix|
+              return prefix.tr('-', '_').to_sym if model_id.start_with?(prefix)
+            end
+            :unknown
+          end
+
+          def infer_usage_type(model_info)
+            caps = model_info.respond_to?(:capabilities) ? Array(model_info.capabilities) : []
+            return :embedding if caps.include?(:embedding)
+            return :moderation if caps.include?(:moderation)
+            return :image if caps.include?(:image_generation)
+
+            :inference
           end
 
           def fetch_model_detail(model_name)

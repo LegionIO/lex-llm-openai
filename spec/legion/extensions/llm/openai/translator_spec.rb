@@ -301,4 +301,59 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
       end
     end
   end
+
+  describe '#parse_response usage with nested cached_tokens' do
+    it 'extracts cache_read_tokens from prompt_tokens_details (Chat API)' do
+      wire = {
+        'model' => 'gpt-4o',
+        'choices' => [{ 'message' => { 'content' => 'Hi' }, 'finish_reason' => 'stop' }],
+        'usage' => {
+          'prompt_tokens' => 1000,
+          'completion_tokens' => 50,
+          'prompt_tokens_details' => { 'cached_tokens' => 800 },
+          'completion_tokens_details' => { 'reasoning_tokens' => 20 }
+        }
+      }
+
+      result = translator.parse_response(wire)
+      expect(result.usage.input_tokens).to eq(1000)
+      expect(result.usage.output_tokens).to eq(50)
+      expect(result.usage.cache_read_tokens).to eq(800)
+      expect(result.usage.thinking_tokens).to eq(20)
+    end
+
+    it 'extracts cache_read_tokens from input_tokens_details (Responses API)' do
+      wire = {
+        'model' => 'gpt-4o',
+        'choices' => [{ 'message' => { 'content' => 'Hi' }, 'finish_reason' => 'stop' }],
+        'usage' => {
+          'input_tokens' => 500,
+          'output_tokens' => 100,
+          'input_tokens_details' => { 'cached_tokens' => 400 },
+          'output_tokens_details' => { 'reasoning_tokens' => 30 }
+        }
+      }
+
+      result = translator.parse_response(wire)
+      expect(result.usage.input_tokens).to eq(500)
+      expect(result.usage.output_tokens).to eq(100)
+      expect(result.usage.cache_read_tokens).to eq(400)
+      expect(result.usage.thinking_tokens).to eq(30)
+    end
+
+    it 'works with symbol-keyed usage (from Legion::JSON.load)' do
+      wire = {
+        'model' => 'gpt-4o',
+        'choices' => [{ 'message' => { 'content' => 'Hi' }, 'finish_reason' => 'stop' }],
+        'usage' => {
+          prompt_tokens: 600,
+          completion_tokens: 80,
+          prompt_tokens_details: { cached_tokens: 500 }
+        }
+      }
+
+      result = translator.parse_response(wire)
+      expect(result.usage.cache_read_tokens).to eq(500)
+    end
+  end
 end

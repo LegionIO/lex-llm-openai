@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.4 - 2026-06-16
+
+- dependency updates, code quality improvements
+
+## 0.4.3 - 2026-06-15
+
+- **CapabilityPolicy integration** — CAPABILITY_MAP fed as `:provider_catalog` source. Settings overrides at provider/instance/model level supported.
+
+## 0.4.2 — 2026-06-13
+
+- **Gemfile cleanup** — Remove local path overrides; dependencies resolve from gemspec via rubygems.
+- **Capabilities** — Add canonical `:tools` to capability declarations.
+- **Bug fix** — Extract nested `cached_tokens` from usage details (G26).
+- 153 examples, 0 failures; 16 files, 0 rubocop offenses.
+
 ## 0.4.1 — 2026-06-10
 
 - Canonical translator (`Translator`): `render_request`, `parse_response`, `parse_chunk`, `capabilities` — provider-boundary contract per N×N routing Amendment A
