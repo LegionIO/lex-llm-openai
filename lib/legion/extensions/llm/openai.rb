@@ -16,13 +16,17 @@ module Legion
         extend Legion::Extensions::Llm::AutoRegistration
 
         PROVIDER_FAMILY = :openai
+        # Provider's preferred default when the operator configures none. Used only
+        # as a fallback and only when the configured model policy permits it
+        # (see resolve_default_model) — a whitelist/blacklist is never overridden.
+        DEFAULT_MODEL = 'gpt-5.5'
 
         def self.default_settings
           ::Legion::Extensions::Llm.provider_settings(
             family: PROVIDER_FAMILY,
             instance: {
               endpoint: 'https://api.openai.com',
-              default_model: 'gpt-5.5',
+              default_model: DEFAULT_MODEL,
               tier: :frontier,
               transport: :http,
               credentials: {
@@ -100,15 +104,24 @@ module Legion
             candidates[name.to_sym] = normalized.merge(tier: :frontier)
           end
 
-          # 8. Dedup + inject default_model
+          # 8. Dedup + inject a policy-aware default_model
           discovered = CredentialSources.dedup_credentials(candidates).transform_values do |config|
             sanitized = sanitize_instance_config(config)
-            sanitized[:default_model] ||= 'gpt-5.5'
+            sanitized[:default_model] = resolve_default_model(sanitized)
             sanitized
           end
           instance_names = discovered.keys.sort_by(&:to_s).join(', ')
           log.debug { "Discovered #{discovered.size} OpenAI provider instance candidate(s): #{instance_names}" }
           discovered
+        end
+
+        # Resolve a default_model that never violates the configured model policy
+        # (whitelist/blacklist stays authoritative over the DEFAULT_MODEL fallback).
+        def self.resolve_default_model(config)
+          provider_class.policy_safe_default_model(
+            configured: config[:default_model], fallback: DEFAULT_MODEL,
+            **provider_class.model_policy(config, PROVIDER_FAMILY)
+          )
         end
 
         def self.settings_instances(config)
