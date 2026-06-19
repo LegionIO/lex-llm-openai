@@ -334,7 +334,7 @@ module Legion
             conf = Legion::Extensions::Llm::CredentialSources.setting(:extensions, :llm, :openai)
             conf.is_a?(Hash) ? conf.to_h.except(:instances, 'instances') : {}
           rescue StandardError => e
-            handle_exception(e, level: :debug, handled: true, operation: 'openai.provider_capability_config')
+            handle_exception(e, level: :warn, handled: true, operation: 'openai.provider_capability_config')
             {}
           end
 
@@ -360,7 +360,7 @@ module Legion
 
             models_conf.to_h[model_id.to_s] || models_conf.to_h[model_id.to_sym] || {}
           rescue StandardError => e
-            handle_exception(e, level: :debug, handled: true, operation: 'openai.model_capability_config')
+            handle_exception(e, level: :warn, handled: true, operation: 'openai.model_capability_config')
             {}
           end
 
