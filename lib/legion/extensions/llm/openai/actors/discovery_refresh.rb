@@ -88,14 +88,18 @@ module Legion
               tick
             end
 
-            def lanes_for_instance(instance_entry)
+            def lanes_for_instance(instance_entry) # rubocop:disable Metrics/CyclomaticComplexity
               adapter = instance_entry[:adapter]
               return [] unless adapter.respond_to?(:discover_offerings)
 
-              instance_id = instance_entry[:instance_id] || instance_entry[:id] || :default
+              instance_id = instance_entry[:instance] || instance_entry[:instance_id] ||
+                            instance_entry[:id] || :default
               lanes = []
 
-              Array(adapter.discover_offerings(live: false)).each do |offering|
+              Array(adapter.discover_offerings(live: false)).each do |raw_offering|
+                offering = offering_to_hash(raw_offering)
+                next unless offering
+
                 lane = build_lane(offering, instance_id)
                 lanes << lane
                 fleet_lane = maybe_fleet_lane(offering, lane)
@@ -103,6 +107,16 @@ module Legion
               end
 
               lanes
+            end
+
+            def offering_to_hash(offering)
+              return nil if offering.nil?
+              return offering if offering.is_a?(Hash)
+
+              hash = offering.to_h
+              hash[:type] ||= hash[:usage_type]
+              hash[:enabled] = offering.respond_to?(:enabled?) ? offering.enabled? : true
+              hash
             end
 
             def build_lane(offering, instance_id)
