@@ -84,9 +84,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     stub_registry_publisher
     stub_model_discovery
 
-    models = provider.list_models
+    provider.discover_offerings(live: true)
 
-    expect_registry_publish(models)
+    expect(registry_publisher).to have_received(:publish_models_async).at_least(:once)
   end
 
   it 'uses the base RegistryPublisher from lex-llm' do
@@ -236,10 +236,5 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   def stub_model_discovery
     allow(provider.connection).to receive(:get).with('/v1/models').and_return(fake_response(models_body))
-  end
-
-  def expect_registry_publish(models)
-    expect(registry_publisher).to have_received(:publish_models_async)
-      .with(models, readiness: hash_including(provider: :openai, live: false))
   end
 end
