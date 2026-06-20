@@ -29,8 +29,6 @@ module Legion
               include Legion::Extensions::Llm::Inventory::ScopedRefresher
             end
 
-            REFRESH_INTERVAL = 1800
-
             def self.every_seconds = 3600
 
             def runner_class    = self.class
@@ -41,9 +39,9 @@ module Legion
             def generate_task?  = false
 
             def time
-              return REFRESH_INTERVAL unless defined?(Legion::Settings)
+              return self.class.every_seconds unless defined?(Legion::Settings)
 
-              Legion::Settings.dig(:extensions, :llm, :openai, :discovery_interval) || REFRESH_INTERVAL
+              Legion::Settings.dig(:extensions, :llm, :openai, :discovery_interval) || self.class.every_seconds
             end
 
             def scope_key
@@ -96,7 +94,7 @@ module Legion
                             instance_entry[:id] || :default
               lanes = []
 
-              Array(adapter.discover_offerings(live: false)).each do |raw_offering|
+              Array(adapter.discover_offerings(live: true)).each do |raw_offering|
                 offering = offering_to_hash(raw_offering)
                 next unless offering
 

@@ -73,7 +73,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     embed_model = models.find { |m| m.id == 'text-embedding-3-small' }
 
     expect(gpt_model).to be_a(Legion::Extensions::Llm::Model::Info)
-    expect(gpt_model.capabilities).to include(:completion, :streaming, :function_calling, :vision)
+    expect(gpt_model.capabilities).to include(:completion, :streaming, :tools, :vision)
     expect(gpt_model.modalities_input).to include(:text, :image)
 
     expect(embed_model.capabilities).to eq([:embedding])

@@ -211,31 +211,18 @@ module Legion
             raise
           end
 
-          def discover_offerings(live: false, **)
-            models = if live
-                       @cached_models = list_models
-                     else
-                       Array(@cached_models)
-                     end
-            offerings = models.filter_map { |model_info| offering_from_model(model_info) }
-            log.debug { "built #{offerings.size} OpenAI offering(s) live=#{live}" }
-            offerings
-          rescue StandardError => e
-            handle_exception(e, level: :warn, handled: true, operation: 'openai.discover_offerings')
-            []
-          end
-
           # ── CapabilityPolicy integration ─────────────────────────────────
           # Maps raw CAPABILITY_MAP symbol arrays to the boolean hash format
           # that CapabilityPolicy.resolve expects as :provider_catalog.
           CATALOG_CAPABILITY_MAPPING = {
+            completion: :completion,
             streaming: :streaming,
             function_calling: :tools,
             tools: :tools,
             vision: :vision,
             structured_output: :structured_output,
             reasoning: :thinking,
-            embedding: :embeddings,
+            embedding: :embedding,
             image_generation: :image,
             audio_transcription: :audio_transcription,
             audio_generation: :audio_speech
@@ -278,11 +265,11 @@ module Legion
             }
           end
 
-          def offering_from_model(model_info)
+          def offering_from_model(model_info, health: {})
             policy = resolve_model_policy(model_info)
 
             Legion::Extensions::Llm::Routing::ModelOffering.new(
-              offering_attrs_for(model_info, policy)
+              offering_attrs_for(model_info, policy, health:)
             )
           end
 
@@ -300,21 +287,30 @@ module Legion
             )
           end
 
-          def offering_attrs_for(model_info, policy)
+          def offering_attrs_for(model_info, policy, health: {})
             {
               provider_family: :openai,
-              instance_id: config.respond_to?(:instance_id) ? config.instance_id : :default,
-              transport: :http,
-              tier: :frontier,
+              instance_id: offering_instance_id,
+              transport: offering_transport,
+              tier: offering_tier,
               model: model_info.id,
-              canonical_model_alias: model_info.respond_to?(:name) ? model_info.name : nil,
+              canonical_model_alias: offering_alias(model_info),
               model_family: infer_model_family(model_info.id),
               usage_type: infer_usage_type(model_info),
               capabilities: policy[:capabilities],
               capability_sources: policy[:sources],
               limits: { context_window: model_info.context_length }.compact,
+              health: health,
               metadata: { capability_sources: policy[:sources] }
             }
+          end
+
+          def offering_instance_id
+            config.respond_to?(:instance_id) ? config.instance_id : :default
+          end
+
+          def offering_alias(model_info)
+            model_info.respond_to?(:name) ? model_info.name : nil
           end
 
           def capabilities_to_boolean_hash(capability_symbols)
@@ -328,49 +324,6 @@ module Legion
             result
           end
 
-          def provider_capability_config
-            return {} unless defined?(Legion::Extensions::Llm::CredentialSources)
-
-            conf = Legion::Extensions::Llm::CredentialSources.setting(:extensions, :llm, :openai)
-            conf.is_a?(Hash) ? conf.to_h.except(:instances, 'instances') : {}
-          rescue StandardError => e
-            handle_exception(e, level: :warn, handled: true, operation: 'openai.provider_capability_config')
-            {}
-          end
-
-          def instance_capability_config
-            cfg = config
-            result = {}
-            %i[capabilities enable_thinking enable_tools enable_streaming enable_vision enable_embeddings
-               thinking_flag tools_flag streaming_flag vision_flag embedding_flag embeddings_flag
-               tool_flag images_flag image_flag].each do |key|
-              next unless cfg.respond_to?(key)
-
-              val = cfg.send(key)
-              result[key] = val unless val.nil?
-            rescue StandardError
-              next
-            end
-            result
-          end
-
-          def model_capability_config(model_id)
-            models_conf = fetch_models_config
-            return {} unless models_conf.respond_to?(:to_h)
-
-            models_conf.to_h[model_id.to_s] || models_conf.to_h[model_id.to_sym] || {}
-          rescue StandardError => e
-            handle_exception(e, level: :warn, handled: true, operation: 'openai.model_capability_config')
-            {}
-          end
-
-          def fetch_models_config
-            return config.models if config.respond_to?(:models)
-            return config[:models] if config.respond_to?(:[])
-
-            nil
-          end
-
           def infer_model_family(model_id)
             CAPABILITY_MAP.each_key do |prefix|
               return prefix.tr('-', '_').to_sym if model_id.start_with?(prefix)
@@ -382,7 +335,7 @@ module Legion
             caps = model_info.respond_to?(:capabilities) ? Array(model_info.capabilities) : []
             return :embedding if caps.include?(:embedding)
             return :moderation if caps.include?(:moderation)
-            return :image if caps.include?(:image_generation)
+            return :image if caps.include?(:image)
 
             :inference
           end

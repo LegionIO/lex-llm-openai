@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.7] - 2026-06-20
+
+### Fixed
+- Normalize OpenAI offering capabilities through the canonical `lex-llm` contract so `completion`, `embedding`, `thinking`, image, and audio capabilities survive discovery without provider-specific vocabulary drift.
+- Move provider/instance/model capability override extraction onto the shared base provider implementation.
+
 ## [0.4.6] - 2026-06-19
 
 ### Changed
