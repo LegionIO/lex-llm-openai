@@ -254,7 +254,7 @@ module Legion
           end
 
           def log_model_discovered(model)
-            log.unknown(
+            log.debug(
               "[#{slug}] instance=#{provider_instance_id} action=model_discovered " \
               "model=#{model.id} family=#{model.family}"
             )
