@@ -74,14 +74,7 @@ module Legion
             end
 
             def manual
-              log.debug('[openai][discovery_refresh] refreshing model list')
               tick_if_scoped_refresher
-
-              return unless defined?(Legion::LLM::Discovery)
-
-              Legion::LLM::Discovery.refresh_discovered_models!(provider: :openai)
-              populate_auto_rules_if_available
-              invalidate_cache_if_available
             rescue StandardError => e
               handle_exception(e, level: :warn, handled: true, operation: 'openai.actor.discovery_refresh')
             end
@@ -93,20 +86,6 @@ module Legion
               return unless self.class.ancestors.include?(Legion::Extensions::Llm::Inventory::ScopedRefresher)
 
               tick
-            end
-
-            def populate_auto_rules_if_available
-              return unless defined?(Legion::LLM::Router)
-              return unless Legion::LLM::Router.respond_to?(:populate_auto_rules)
-
-              Legion::LLM::Router.populate_auto_rules(Legion::LLM::Discovery.discovered_instances)
-            end
-
-            def invalidate_cache_if_available
-              return unless defined?(Legion::LLM::Inventory)
-              return unless Legion::LLM::Inventory.respond_to?(:invalidate_offerings_cache!)
-
-              Legion::LLM::Inventory.invalidate_offerings_cache!
             end
 
             def lanes_for_instance(instance_entry)
