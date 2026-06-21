@@ -71,9 +71,9 @@ RSpec.describe Legion::Extensions::Llm::Openai::Provider do # CapabilityPolicy i
         offering = offerings.first
 
         expect(offering.capabilities).not_to include(:thinking)
-        expect(offering.capabilities).not_to include(:embeddings)
+        expect(offering.capabilities).not_to include(:embedding)
         expect(offering.capability_sources[:thinking]).to eq({ value: false, source: :provider_override })
-        expect(offering.capability_sources[:embeddings]).to eq({ value: false, source: :provider_override })
+        expect(offering.capability_sources[:embedding]).to eq({ value: false, source: :provider_override })
       end
     end
 

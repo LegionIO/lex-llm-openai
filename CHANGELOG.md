@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.8] - 2026-06-20
+
+### Fixed
+- Stop bulk-publishing OpenAI model availability from `list_models`; discovery now emits one registry event per seen model from the shared `lex-llm` policy-filter path so blocked models stay observable without duplicate publishes.
+
+## [0.4.7] - 2026-06-20
+
+### Fixed
+- Normalize OpenAI offering capabilities through the canonical `lex-llm` contract so `completion`, `embedding`, `thinking`, image, and audio capabilities survive discovery without provider-specific vocabulary drift.
+- Move provider/instance/model capability override extraction onto the shared base provider implementation.
+
+## [0.4.6] - 2026-06-19
+
+### Changed
+- Adopt `Legion::Extensions::Llm::Inventory::ScopedRefresher` mixin (lex-llm 0.6.0). Discovery
+  refresh actors now write directly to the live `Inventory` catalog via `Inventory.write_lane`.
+- Pin `lex-llm >= 0.6.0` and `legion-llm >= 0.14.0` in gemspec.
+- Standard `weight: 100` default added to provider instance settings schema.
+
 ## 0.4.5 - 2026-06-17
 
 ### Changed
