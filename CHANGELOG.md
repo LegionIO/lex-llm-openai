@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.9] - 2026-07-24
+
+### Fixed
+- **Translator no longer discards content when `finish_reason` is present on SSE chunk.** Previously returned a done chunk immediately when finish_reason was set, silently dropping any content, reasoning, or tool_call data on the same event. Now checks for content fields first and only emits done when the delta is truly empty. Passes `stop_reason` and `usage` through to content/tool_call chunks.
+
 ## [0.4.8] - 2026-06-20
 
 ### Fixed
