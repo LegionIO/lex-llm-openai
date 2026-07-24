@@ -2,6 +2,8 @@
 
 source 'https://rubygems.org'
 
+gem 'lex-llm', path: '../lex-llm' if File.directory?(File.expand_path('../lex-llm', __dir__))
+
 gemspec
 
 group :development do

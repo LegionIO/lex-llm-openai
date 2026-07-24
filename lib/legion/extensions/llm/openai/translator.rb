@@ -116,16 +116,26 @@ module Legion
             finish_reason = choice['finish_reason']
             usage_raw = data['usage']
 
-            return build_done_chunk(data, finish_reason, usage_raw) if finish_reason
+            chunk_stop_reason = finish_reason ? map_stop_reason(finish_reason) : nil
+            chunk_usage = finish_reason && usage_raw ? parse_usage(usage_raw) : nil
+
             return parse_error_chunk(data) if data['error']
 
             reasoning = delta['reasoning_content'] || delta['reasoning']
             content = delta['content']
 
-            return build_thinking_chunk(reasoning, data['id']) if reasoning
-            return build_text_chunk(content, data['id']) if content
+            if reasoning
+              return build_thinking_chunk(reasoning, data['id'], stop_reason: chunk_stop_reason,
+                                                                 usage: chunk_usage)
+            end
+            return build_text_chunk(content, data['id'], stop_reason: chunk_stop_reason, usage: chunk_usage) if content
 
-            parse_tool_call_delta(delta, data)
+            tc_chunk = parse_tool_call_delta(delta, data, stop_reason: chunk_stop_reason, usage: chunk_usage)
+            return tc_chunk if tc_chunk
+
+            return build_done_chunk(data, finish_reason, usage_raw) if finish_reason
+
+            nil
           rescue StandardError => e
             handle_exception(e, level: :error, handled: true, operation: 'openai.translator.parse_chunk')
             Canonical::Chunk.error_chunk(
@@ -403,21 +413,25 @@ module Legion
             )
           end
 
-          def build_thinking_chunk(reasoning, request_id)
+          def build_thinking_chunk(reasoning, request_id, stop_reason: nil, usage: nil)
             Canonical::Chunk.thinking_delta(
               delta: reasoning,
-              request_id: request_id
+              request_id: request_id,
+              stop_reason: stop_reason,
+              usage: usage
             )
           end
 
-          def build_text_chunk(content, request_id)
+          def build_text_chunk(content, request_id, stop_reason: nil, usage: nil)
             Canonical::Chunk.text_delta(
               delta: content,
-              request_id: request_id
+              request_id: request_id,
+              stop_reason: stop_reason,
+              usage: usage
             )
           end
 
-          def parse_tool_call_delta(delta, data)
+          def parse_tool_call_delta(delta, data, stop_reason: nil, usage: nil)
             raw_tc = delta['tool_calls']
             return nil unless raw_tc&.any?
 
@@ -432,7 +446,9 @@ module Legion
 
             Canonical::Chunk.tool_call_delta(
               tool_call: tool_call,
-              request_id: data['id']
+              request_id: data['id'],
+              stop_reason: stop_reason,
+              usage: usage
             )
           end
 
