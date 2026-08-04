@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.10] - 2026-08-04
+
+### Changed
+- Align the `lex-llm` dependency floor with the canonical streaming chunk API already used by the OpenAI translator. No runtime implementation changes are included.
+
 ## [0.4.9] - 2026-07-24
 
 ### Fixed
