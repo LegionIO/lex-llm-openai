@@ -148,31 +148,8 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     end
   end
 
-  describe '.resolve_default_model (policy-aware default)' do
-    before { stub_settings(nil) }
-
-    it 'keeps a configured default when no policy is set' do
-      expect(described_class.resolve_default_model(default_model: 'gpt-5-nano')).to eq('gpt-5-nano')
-    end
-
-    it 'falls back to DEFAULT_MODEL when none configured and no policy' do
-      expect(described_class.resolve_default_model({})).to eq(described_class::DEFAULT_MODEL)
-    end
-
-    it 'drops a configured default the whitelist forbids rather than forcing it' do
-      expect(described_class.resolve_default_model(default_model: 'gpt-5.5', model_whitelist: %w[nano])).to be_nil
-    end
-
-    it 'keeps a whitelisted configured default' do
-      expect(described_class.resolve_default_model(default_model: 'gpt-5-nano', model_whitelist: %w[nano]))
-        .to eq('gpt-5-nano')
-    end
-
-    it 'reads the provider-level whitelist when the instance config has none' do
-      stub_settings({ model_whitelist: %w[nano] })
-      expect(described_class.resolve_default_model(default_model: 'gpt-5.5')).to be_nil
-    end
-  end
+  # NOTE: .resolve_default_model removed in SSOT v3 migration (v0.5.0).
+  # Model selection is now handled by the routing layer via discovered offerings.
 
   # -- helpers ----------------------------------------------------------------
 

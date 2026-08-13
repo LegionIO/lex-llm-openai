@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0] - 2026-08-13
+
+### Changed
+- **SSOT v3 provider migration** — Complete rewrite of `DiscoveryRefresh` actor to use `Inventory::Publisher`, `Registry`, `InstanceKey`, `ProbeCoordinator`, and `OfferingDraft` from lex-llm 0.7.0.
+- Remove `DEFAULT_MODEL` constant and `resolve_default_model` method. Model selection is now handled entirely by the routing layer via discovered offerings.
+- Remove `default_model` from `default_settings` instance hash.
+- Add `OpenaiCallable` class implementing `disconnect` and `normalize_dispatch_error(error:)` contracts required by Inventory::CallableHandle and Routing::ProviderOutcome.
+- Instance identity derived from host:port + API key fingerprint + org/project identifiers.
+- Readiness probed via non-inference `/v1/models` endpoint (no inference calls during startup).
+- Quota domains derived from OpenAI organization/project identifiers.
+- Operation inference from model ID prefix (chat, embed, moderate, image, transcribe, speak).
+- Capability evidence sourced from Provider::CAPABILITY_MAP.
+- Graceful shutdown removes all instances from the registry.
+- Require `lex-llm >= 0.7.0`.
+
+### Added
+- SSOT v3 conformance spec (`openai_ssot_v3_conformance_spec.rb`) validating the full Publisher/Registry contract.
+
 ## [0.4.10] - 2026-08-04
 
 ### Changed
