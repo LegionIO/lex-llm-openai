@@ -263,11 +263,11 @@ module Legion
               conn = build_api_connection(instance_cfg: instance_cfg)
               response = conn.get('/v1/models')
               build_readiness_from_response(response: response, instance_cfg: instance_cfg)
-            rescue Faraday::ConnectionFailed => e
-              readiness_failure(reason: "OpenAI /v1/models connection failed: #{e.message}", error: e)
-            rescue Faraday::TimeoutError => e
-              readiness_failure(reason: "OpenAI /v1/models timeout: #{e.message}", error: e)
+            rescue Faraday::ConnectionFailed, Faraday::TimeoutError => e
+              handle_exception(e, level: :warn, handled: true, operation: 'openai.actor.check_readiness')
+              readiness_failure(reason: "OpenAI /v1/models network error: #{e.message}", error: e)
             rescue StandardError => e
+              handle_exception(e, level: :warn, handled: true, operation: 'openai.actor.check_readiness')
               readiness_failure(reason: "OpenAI /v1/models error: #{e.message}", error: e)
             end
 
@@ -412,7 +412,9 @@ module Legion
               host = uri.host || 'api.openai.com'
               port = uri.port
               "#{host}:#{port}"
-            rescue URI::InvalidURIError
+            rescue URI::InvalidURIError => e
+              handle_exception(e, level: :warn, handled: true, operation: 'openai.actor.extract_host_port',
+                                  url: url.to_s)
               'api.openai.com:443'
             end
 

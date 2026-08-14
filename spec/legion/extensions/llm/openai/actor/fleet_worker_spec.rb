@@ -16,7 +16,7 @@ end
 
 require 'legion/extensions/llm/openai/actors/fleet_worker'
 
-RSpec.describe Legion::Extensions::Llm::Openai::Actor::FleetWorker do # rubocop:disable RSpec/SpecFilePathFormat
+RSpec.describe Legion::Extensions::Llm::Openai::Actor::FleetWorker do
   subject(:actor) { described_class.new }
 
   it 'uses the logging helper for actor diagnostics' do

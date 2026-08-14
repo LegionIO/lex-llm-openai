@@ -98,9 +98,11 @@ module Legion
             }
           }.freeze
 
-          class << self
-            attr_writer :registry_publisher
+          # Canonical OpenAI API base URL. Used as fallback when no custom
+          # openai_api_base is configured on the provider instance.
+          DEFAULT_ENDPOINT = 'https://api.openai.com'
 
+          class << self
             def slug = 'openai'
             def configuration_requirements = %i[openai_api_key]
 
@@ -115,10 +117,6 @@ module Legion
             end
 
             def capabilities = Capabilities
-
-            def registry_publisher
-              @registry_publisher ||= Legion::Extensions::Llm::RegistryPublisher.new(provider_family: :openai)
-            end
           end
 
           # Provider-level capability checks based on current OpenAI model families.
@@ -168,7 +166,7 @@ module Legion
           end
 
           def api_base
-            config.openai_api_base || settings[:instances][:default][:endpoint]
+            config.openai_api_base || DEFAULT_ENDPOINT
           end
 
           # Canonical translator instance - the provider boundary contract.
@@ -357,7 +355,8 @@ module Legion
           def instance_host_port
             uri = URI.parse(api_base.to_s)
             "#{uri.host || 'api.openai.com'}:#{uri.port}"
-          rescue URI::InvalidURIError
+          rescue URI::InvalidURIError => e
+            handle_exception(e, level: :warn, handled: true, operation: 'openai.provider.instance_host_port')
             'api.openai.com:443'
           end
 

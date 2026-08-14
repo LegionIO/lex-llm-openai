@@ -93,10 +93,8 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(offerings).not_to be_empty
   end
 
-  it 'uses the base RegistryPublisher from lex-llm' do
-    publisher = described_class::Provider.registry_publisher
-    expect(publisher).to be_a(Legion::Extensions::Llm::RegistryPublisher)
-    expect(publisher.provider_family).to eq(:openai)
+  it 'does not ship a registry_publisher class method (SSOT v3: single publication path via DiscoveryRefresh)' do
+    expect(described_class::Provider).not_to respond_to(:registry_publisher)
   end
 
   it 'builds sanitized lex-llm registry events via the base RegistryEventBuilder' do

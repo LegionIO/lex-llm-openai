@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.1] - 2026-08-13
+
+### Fixed
+- **§9 No default model** — Removed `|| 'gpt-4o'` fallback from `Translator#resolve_model`. Translator now raises `ArgumentError` if routing, caller, and metadata all lack a model. Spec fixtures updated to supply `routing: { model: 'gpt-4o' }` explicitly.
+- **§2 Dead second engine removed** — Removed `registry_publisher` class method and `attr_writer :registry_publisher` from `Provider`. `DiscoveryRefresh` actor via `Inventory::Publisher` is the sole publication path.
+- **§1 No rubocop:disable** — Removed all 7 remaining inline disable directives. Fixed underlying violations: `Metrics/ModuleLength` resolved by inlining `transform_values` block in `dedup_and_log_candidates`; `Metrics/ClassLength` resolved by inlining intermediate variable in `Translator#map_stop_reason`; `Metrics/AbcSize`/`CyclomaticComplexity` resolved by extracting helpers in `discover_instances`, `normalize_instance_config`, `render_message`, `parse_chunk`, `parse_response`, and `apply_params`; `Lint/DuplicateBranch` resolved by merging duplicate `:user` branch.
+- **§1 No swallowed rescue** — Added `handle_exception` to `Provider#instance_host_port`, `DiscoveryRefresh#extract_host_port`, and merged `Faraday::ConnectionFailed`/`TimeoutError` rescue in `check_readiness`.
+- **§9 Spec path alignment** — Moved `fleet_worker_spec.rb` from plural `actors/` path to singular `actor/` path matching described class `Actor::FleetWorker`.
+- **RuboCop gate** — 0 offenses across 18 files. Conformance model injection added to `spec_helper.rb` so shared examples pass without modifying the installed lex-llm kit.
+
 ## [0.6.0] - 2026-08-13
 
 ### Fixed

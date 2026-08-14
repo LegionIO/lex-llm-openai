@@ -22,3 +22,22 @@ begin
 rescue Gem::LoadError, StandardError => e
   Legion::Logging.warn("[spec_helper] conformance kit not available: #{e.message}")
 end
+
+# §9: Inject routing[:model] into conformance request fixtures so the translator
+# always receives a model. The conformance kit fixtures predate the §9 rule that
+# routing must carry a model; patching here keeps the kit unchanged.
+if defined?(Canonical::Conformance)
+  module Canonical
+    module Conformance
+      class << self
+        alias fixture_without_model_injection fixture
+
+        def fixture(name)
+          data = fixture_without_model_injection(name)
+          data['routing'] = { 'model' => 'gpt-4o-mini' } if name.end_with?('_request') && !data.key?('routing')
+          data
+        end
+      end
+    end
+  end
+end
