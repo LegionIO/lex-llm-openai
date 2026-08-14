@@ -2,8 +2,8 @@
 
 require 'digest'
 require 'uri'
-require_relative 'openai_callable'
-require_relative 'discovery_evidence_builders'
+require_relative '../openai_callable'
+require_relative '../discovery_evidence_builders'
 
 begin
   require 'legion/extensions/actors/every'
@@ -34,7 +34,7 @@ module Legion
           class DiscoveryRefresh < Legion::Extensions::Actors::Every
             include Legion::Extensions::Helpers::Lex
             include Legion::Logging::Helper
-            include DiscoveryEvidenceBuilders
+            include Legion::Extensions::Llm::Openai::DiscoveryEvidenceBuilders
 
             # Standard capability symbols mapped to their evidence key.
             # Reasoning maps to the :thinking evidence capability key.
@@ -108,7 +108,7 @@ module Legion
               instance_key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
                 provider_family: :openai, instance_id: instance_id
               )
-              callable = OpenaiCallable.new(instance_cfg: instance_cfg, logger: log)
+              callable = Legion::Extensions::Llm::Openai::OpenaiCallable.new(instance_cfg: instance_cfg, logger: log)
               probe_coordinator = Legion::Extensions::Llm::Inventory::ProbeCoordinator.new(
                 instance_key: instance_key,
                 enqueue: build_probe_enqueue(instance_id: instance_id)

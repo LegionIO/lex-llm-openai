@@ -43,7 +43,7 @@ load File.expand_path('../../../../lib/legion/extensions/llm/openai/actors/disco
 # Test-local callable that extends OpenaiCallable with dispatch operations
 # required by FleetWorkerExecution. Tracks inference call count for
 # conformance assertions.
-class TrackingOpenaiCallable < Legion::Extensions::Llm::Openai::Actor::OpenaiCallable
+class TrackingOpenaiCallable < Legion::Extensions::Llm::Openai::OpenaiCallable
   attr_reader :call_count
 
   def initialize(instance_cfg:, logger:)
@@ -724,7 +724,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   # --- OpenaiCallable direct contract ----------------------------------------
 
-  describe Legion::Extensions::Llm::Openai::Actor::OpenaiCallable do
+  describe Legion::Extensions::Llm::Openai::OpenaiCallable do
     let(:callable) do
       described_class.new(
         instance_cfg: ssot_harness.instance_configs[0],
