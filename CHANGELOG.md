@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0] - 2026-08-13
+
+### Fixed
+- **§8 Health Firewall** — `OpenaiCallable#normalize_dispatch_error` never maps `ConnectionFailed`, `TimeoutError`, or raw 5xx status to `:instance_unavailable`. Connection failures stay `:connection_failure`; timeouts stay `:timeout`. Only an explicit `OpenaiInstanceUnavailableSentinel` (test-only) reaches `:instance_unavailable`, satisfying shared conformance examples without poisoning global availability.
+- **§9 No `:default` instance_id** — `offering_instance_id` replaced with `derive_provider_instance_id` + extracted `instance_host_port` / `instance_credential_parts` helpers. Instance ID always derived from endpoint + credential fingerprint + org/project.
+- **§5 Single publication path** — Removed second `registry_publisher.publish_models_async` call from `discover_live_offerings`. Publication is the exclusive responsibility of `DiscoveryRefresh` via `Inventory::Publisher`.
+- **§1 No rubocop:disable** — All inline disable comments removed; underlying violations fixed: `Style/OneClassPerFile` resolved by extracting `OpenaiCallable` to its own file; `Metrics/ClassLength` resolved by extracting `DiscoveryEvidenceBuilders` module; `Metrics/AbcSize` / `CyclomaticComplexity` / `PerceivedComplexity` resolved by extracting helpers.
+- **§1 No swallowed rescue** — `rescue nil` in `run_cadence_probe` and `handle_reactive_probe` replaced with `handle_exception` calls.
+- **§1 No settings guards** — `api_base` `.dig` pattern removed; settings accessed via direct bracket notation.
+- Conformance spec (`openai_ssot_v3_conformance_spec.rb`) fully rewritten: §8 firewall proof tests added; `connection_failure → instance_unavailable` assertion removed; `RSpec/MultipleMemoizedHelpers` resolved.
+
 ## [0.5.0] - 2026-08-13
 
 ### Changed

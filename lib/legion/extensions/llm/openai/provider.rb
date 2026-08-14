@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'digest'
+require 'uri'
 require 'legion/extensions/llm'
 
 module Legion
@@ -166,7 +168,7 @@ module Legion
           end
 
           def api_base
-            config.openai_api_base || settings.dig(:instances, :default, :endpoint) || 'https://api.openai.com'
+            config.openai_api_base || settings[:instances][:default][:endpoint]
           end
 
           # Canonical translator instance - the provider boundary contract.
@@ -242,9 +244,7 @@ module Legion
           }.freeze
 
           def discover_live_offerings(filters, provider_health, live:)
-            readiness = discovery_registry_readiness(provider_health, live:)
             Array(list_models(live:, **filters)).filter_map do |model|
-              self.class.registry_publisher.publish_models_async([model], readiness:)
               next unless model_matches_filters?(model, filters)
               next unless model_allowed?(model.id)
 
@@ -268,16 +268,6 @@ module Legion
           end
 
           private
-
-          def discovery_registry_readiness(provider_health, live:)
-            {
-              provider: slug.to_sym,
-              configured: configured?,
-              ready: provider_health[:ready] == true,
-              live: live,
-              health: provider_health
-            }
-          end
 
           def build_model_infos(body)
             body.fetch('data', []).map do |raw_model|
@@ -355,7 +345,35 @@ module Legion
           end
 
           def offering_instance_id
-            config.respond_to?(:instance_id) ? config.instance_id : :default
+            derive_provider_instance_id
+          end
+
+          def derive_provider_instance_id
+            host_port = instance_host_port
+            parts = [host_port] + instance_credential_parts
+            parts.join('/')
+          end
+
+          def instance_host_port
+            uri = URI.parse(api_base.to_s)
+            "#{uri.host || 'api.openai.com'}:#{uri.port}"
+          rescue URI::InvalidURIError
+            'api.openai.com:443'
+          end
+
+          def instance_credential_parts
+            parts = []
+            key = config.openai_api_key
+            parts << "ak:#{::Digest::SHA256.hexdigest(key)[0, 8]}" if non_empty_string?(key)
+            org = config.openai_organization_id
+            parts << "org:#{org.strip}" if non_empty_string?(org)
+            proj = config.openai_project_id
+            parts << "proj:#{proj.strip}" if non_empty_string?(proj)
+            parts
+          end
+
+          def non_empty_string?(value)
+            value.is_a?(String) && !value.strip.empty?
           end
 
           def offering_alias(model_info)

@@ -80,13 +80,17 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(embed_model.modalities_output).to eq([:embeddings])
   end
 
-  it 'publishes discovered models asynchronously through the base registry publisher' do
+  it 'does not call publish_models_async (single SSOT v3 publication path via DiscoveryRefresh actor)' do
+    # §5: discover_offerings is a catalog query only. Publication is the
+    # exclusive responsibility of the DiscoveryRefresh actor via
+    # Inventory::Publisher — not a second RegistryPublisher call here.
     stub_registry_publisher
     stub_model_discovery
 
-    provider.discover_offerings(live: true)
+    offerings = provider.discover_offerings(live: true)
 
-    expect(registry_publisher).to have_received(:publish_models_async).at_least(:once)
+    expect(registry_publisher).not_to have_received(:publish_models_async)
+    expect(offerings).not_to be_empty
   end
 
   it 'uses the base RegistryPublisher from lex-llm' do

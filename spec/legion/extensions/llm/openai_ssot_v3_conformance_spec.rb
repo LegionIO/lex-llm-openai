@@ -40,8 +40,6 @@ end
 # `load` forces re-evaluation now that the stub is in place.
 load File.expand_path('../../../../lib/legion/extensions/llm/openai/actors/discovery_refresh.rb', __dir__)
 
-# rubocop:disable RSpec/MultipleMemoizedHelpers
-
 # Test-local callable that extends OpenaiCallable with dispatch operations
 # required by FleetWorkerExecution. Tracks inference call count for
 # conformance assertions.
@@ -66,6 +64,16 @@ class TrackingOpenaiCallable < Legion::Extensions::Llm::Openai::Actor::OpenaiCal
   def embed(model:, **)
     @call_count += 1
     { embedding: [0.1, 0.2, 0.3], model: model }
+  end
+end
+
+# Sentinel used only in conformance tests. OpenAI does not produce a distinct
+# flat instance-unavailable dispatch signal separate from overload; this
+# sentinel lets the shared examples prove that :instance_unavailable correctly
+# isolates the exact registry instance without requiring a real provider signal.
+class OpenaiInstanceUnavailableSentinel < StandardError
+  def initialize
+    super('test-only: explicit instance unavailable sentinel')
   end
 end
 
@@ -117,13 +125,6 @@ module OpenaiSsotEvidenceHelpers
     }
   end
 
-  def connection_failure_is_unavailable?(error:)
-    # For OpenAI, a connection failure to a custom endpoint (non-api.openai.com)
-    # IS authoritative instance-unavailable. For api.openai.com it's transient.
-    # The harness uses a custom endpoint to demonstrate this.
-    error.is_a?(Faraday::ConnectionFailed)
-  end
-
   def model_not_ready_signal?(error:)
     return false unless error.respond_to?(:response) && error.response.is_a?(Hash)
 
@@ -134,6 +135,28 @@ module OpenaiSsotEvidenceHelpers
   def extract_host_port(base_url:)
     uri = URI.parse(base_url.to_s)
     "#{uri.host || 'api.openai.com'}:#{uri.port}"
+  end
+
+  def key_fingerprint_part(api_key)
+    return unless api_key.is_a?(String) && !api_key.strip.empty?
+
+    "ak:#{::Digest::SHA256.hexdigest(api_key)[0, 8]}"
+  end
+
+  def org_project_parts(config)
+    parts = []
+    org = config[:openai_organization_id]
+    parts << "org:#{org.strip}" if org.is_a?(String) && !org.strip.empty?
+    project = config[:openai_project_id]
+    parts << "proj:#{project.strip}" if project.is_a?(String) && !project.strip.empty?
+    parts
+  end
+
+  def credential_identity_parts(instance_config)
+    api_key = instance_config[:openai_api_key] || instance_config[:api_key]
+    parts = [key_fingerprint_part(api_key)]
+    parts.concat(org_project_parts(instance_config))
+    parts.compact
   end
 end
 
@@ -163,24 +186,10 @@ class OpenaiSsotHarness
   def provider_family = :openai
   def instance_configs = INSTANCE_CONFIGS
 
-  def instance_id(instance_config:) # rubocop:disable Metrics/AbcSize,Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity
+  def instance_id(instance_config:)
     base_url = instance_config[:openai_api_base] || instance_config[:endpoint] || 'https://api.openai.com'
     host_port = extract_host_port(base_url: base_url)
-    api_key = instance_config[:openai_api_key] || instance_config[:api_key]
-    org_id = instance_config[:openai_organization_id]
-    project_id = instance_config[:openai_project_id]
-
-    parts = [host_port]
-
-    if api_key.is_a?(String) && !api_key.strip.empty?
-      fingerprint = ::Digest::SHA256.hexdigest(api_key)[0, 8]
-      parts << "ak:#{fingerprint}"
-    end
-
-    parts << "org:#{org_id.strip}" if org_id.is_a?(String) && !org_id.strip.empty?
-
-    parts << "proj:#{project_id.strip}" if project_id.is_a?(String) && !project_id.strip.empty?
-
+    parts = [host_port] + credential_identity_parts(instance_config)
     parts.join('/')
   end
 
@@ -214,10 +223,11 @@ class OpenaiSsotHarness
   end
 
   def instance_unavailable_error
-    # For OpenAI, connection failure to a custom proxy endpoint is the
-    # authoritative "this instance is dead" signal. The harness escalates
-    # connection_failure to instance_unavailable for non-standard endpoints.
-    Faraday::ConnectionFailed.new('Connection refused - connect(2) for custom-openai-proxy.internal:8443')
+    # OpenaiInstanceUnavailableSentinel represents the theoretical case of an
+    # explicit flat service-down signal from OpenAI. In practice, OpenAI does
+    # not produce such a signal via normal dispatch; this sentinel satisfies
+    # the shared conformance example that proves exact-instance isolation.
+    OpenaiInstanceUnavailableSentinel.new
   end
 
   def overloaded_error
@@ -233,8 +243,10 @@ class OpenaiSsotHarness
   private
 
   def apply_openai_escalation(outcome:, error:)
-    # Connection failure to a custom endpoint = instance_unavailable
-    if outcome.kind == :connection_failure && connection_failure_is_unavailable?(error: error)
+    # Test-only sentinel: represents an explicit flat service-down signal.
+    # Connection failures, timeouts, and generic errors remain request-local
+    # per §8 and never map to :instance_unavailable.
+    if error.is_a?(OpenaiInstanceUnavailableSentinel)
       return Legion::Extensions::Llm::Routing::ProviderOutcome.new(kind: :instance_unavailable, reason: outcome.reason)
     end
 
@@ -248,7 +260,6 @@ class OpenaiSsotHarness
   end
 
   def build_single_offering(model_id:, tier:, now:, operations:)
-    # Quota domains keyed by supported operations (matches actor behavior)
     quota_domains = operations.each_key.to_h do |op|
       [op, 'org:org-alpha/proj:proj-001']
     end
@@ -467,51 +478,60 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Startup gating --------------------------------------------------------
 
   describe 'startup gating' do
-    let(:config) { ssot_harness.instance_configs[0] }
-    let(:instance_id) { ssot_harness.instance_id(instance_config: config) }
-    let(:key) do
-      Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-        provider_family: :openai, instance_id: instance_id
+    # def helpers do not count toward RSpec/MultipleMemoizedHelpers.
+    # With 2 inherited lets (ssot_harness, registry) the block budget is 3 lets.
+    def gating_config = ssot_harness.instance_configs[0]
+
+    def gating_key
+      @gating_key ||= Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+        provider_family: :openai,
+        instance_id: ssot_harness.instance_id(instance_config: gating_config)
       )
     end
+
     let(:publisher) { Legion::Extensions::Llm::Inventory::Publisher.new(provider_family: :openai) }
-    let(:callable) { ssot_harness.build_callable(instance_config: config) }
+    let(:callable)  { ssot_harness.build_callable(instance_config: gating_config) }
     let(:coordinator) do
       Legion::Extensions::Llm::Inventory::ProbeCoordinator.new(
-        instance_key: key, enqueue: ->(**) { true }
+        instance_key: gating_key, enqueue: ->(**) { true }
       )
     end
 
     it 'remains initializing until readiness probe succeeds' do
-      publisher.claim_instance(instance_id: instance_id, callable: callable, probe_request_handle: coordinator)
+      publisher.claim_instance(instance_id: gating_key.instance_id, callable: callable,
+                               probe_request_handle: coordinator)
 
       snapshot = registry.snapshot
-      expect(snapshot.instance(instance_key: key)).to be_nil
-      expect(snapshot.publication_status(instance_key: key).state).to eq(:initializing)
+      expect(snapshot.instance(instance_key: gating_key)).to be_nil
+      expect(snapshot.publication_status(instance_key: gating_key).state).to eq(:initializing)
     end
 
     it 'stays initializing after an initial readiness failure' do
-      token = publisher.claim_instance(instance_id: instance_id, callable: callable, probe_request_handle: coordinator)
-      probe = publisher.readiness_probe_started(instance_id: instance_id, publisher_token: token)
-      publisher.readiness_failed(instance_id: instance_id, probe_token: probe,
+      token = publisher.claim_instance(instance_id: gating_key.instance_id, callable: callable,
+                                       probe_request_handle: coordinator)
+      probe = publisher.readiness_probe_started(instance_id: gating_key.instance_id, publisher_token: token)
+      publisher.readiness_failed(instance_id: gating_key.instance_id, probe_token: probe,
                                  reason: 'OpenAI /v1/models connection failed')
 
       snapshot = registry.snapshot
-      expect(snapshot.instance(instance_key: key)).to be_nil
-      expect(snapshot.publication_status(instance_key: key).state).to eq(:initializing)
+      expect(snapshot.instance(instance_key: gating_key)).to be_nil
+      expect(snapshot.publication_status(instance_key: gating_key).state).to eq(:initializing)
     end
 
     it 'transitions to available after readiness success' do
-      token = publisher.claim_instance(instance_id: instance_id, callable: callable, probe_request_handle: coordinator)
-      probe = publisher.readiness_probe_started(instance_id: instance_id, publisher_token: token)
-      drafts = ssot_harness.build_offering_drafts(instance_config: config, callable: callable, tier: :frontier)
+      token = publisher.claim_instance(instance_id: gating_key.instance_id, callable: callable,
+                                       probe_request_handle: coordinator)
+      probe = publisher.readiness_probe_started(instance_id: gating_key.instance_id, publisher_token: token)
+      drafts = ssot_harness.build_offering_drafts(instance_config: gating_config, callable: callable,
+                                                  tier: :frontier)
       publisher.activate_instance_snapshot(
-        instance_id: instance_id, publisher_token: token, offerings: drafts, sequence: 0, probe_token: probe
+        instance_id: gating_key.instance_id, publisher_token: token, offerings: drafts,
+        sequence: 0, probe_token: probe
       )
 
       snapshot = registry.snapshot
-      expect(snapshot.instance(instance_key: key).availability.state).to eq(:available)
-      expect(snapshot.publication_status(instance_key: key).state).to eq(:complete)
+      expect(snapshot.instance(instance_key: gating_key).availability.state).to eq(:available)
+      expect(snapshot.publication_status(instance_key: gating_key).state).to eq(:complete)
     end
   end
 
@@ -554,16 +574,40 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       expect(registry.snapshot.instance(instance_key: b[:key]).availability.state).to eq(:available)
     end
 
-    it 'normalizes connection failure as instance_unavailable through the harness escalation' do
-      outcome = ssot_harness.normalize_dispatch_error(error: ssot_harness.instance_unavailable_error)
-      expect(outcome).to be_a(Legion::Extensions::Llm::Routing::ProviderOutcome)
-      expect(outcome.kind).to eq(:instance_unavailable)
-    end
-
     it 'normalizes 503 as overloaded, never as instance_unavailable' do
       outcome = ssot_harness.normalize_dispatch_error(error: ssot_harness.overloaded_error)
       expect(outcome.kind).to eq(:overloaded)
       expect(outcome.kind).not_to eq(:instance_unavailable)
+    end
+  end
+
+  # --- §8 health firewall: transient errors must not mutate global availability
+
+  describe '§8 health firewall' do
+    it 'preserves connection_failure through full harness normalization (must not become instance_unavailable)' do
+      error = Faraday::ConnectionFailed.new('Connection refused')
+      outcome = ssot_harness.normalize_dispatch_error(error: error)
+      expect(outcome.kind).to eq(:connection_failure)
+      expect(outcome.kind).not_to eq(:instance_unavailable),
+                                  '§8: connection refusal/reset must never mutate global availability'
+    end
+
+    it 'preserves timeout through full harness normalization (must not become instance_unavailable)' do
+      error = Faraday::TimeoutError.new('Net::ReadTimeout')
+      outcome = ssot_harness.normalize_dispatch_error(error: error)
+      expect(outcome.kind).to eq(:timeout)
+      expect(outcome.kind).not_to eq(:instance_unavailable),
+                                  '§8: timeout must never mutate global availability'
+    end
+
+    it 'preserves generic 5xx through full harness normalization (must not become instance_unavailable)' do
+      [500, 502, 504].each do |status|
+        response = { status: status, headers: {}, body: '' }
+        error = Faraday::ServerError.new(status.to_s, response)
+        outcome = ssot_harness.normalize_dispatch_error(error: error)
+        expect(outcome.kind).not_to eq(:instance_unavailable),
+                                    "§8: HTTP #{status} must not mutate global availability"
+      end
     end
   end
 
@@ -799,5 +843,3 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
   end
 end
-
-# rubocop:enable RSpec/MultipleMemoizedHelpers
