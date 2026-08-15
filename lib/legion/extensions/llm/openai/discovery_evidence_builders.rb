@@ -7,6 +7,20 @@ module Legion
         # Evidence-building helpers for DiscoveryRefresh. Extracted to keep
         # the main class within Metrics/ClassLength limits.
         module DiscoveryEvidenceBuilders
+          # Standard capability symbols mapped to their evidence key.
+          # Reasoning maps to the :thinking evidence capability key.
+          # Defined here (not on the actor class): constant lookup from a
+          # module method uses this module's lexical scope, so the consumer
+          # must find it here or build_offering_draft raises NameError.
+          STANDARD_CAPABILITY_CHECKS = {
+            completion: :completion,
+            streaming: :streaming,
+            vision: :vision,
+            reasoning: :thinking,
+            embedding: :embedding,
+            structured_output: :structured_output
+          }.freeze
+
           private
 
           def build_operation_evidence(operations:)

@@ -3,7 +3,6 @@
 require 'spec_helper'
 require 'faraday'
 require 'digest'
-require 'uri'
 
 require 'legion/extensions/llm/inventory/publisher'
 require 'legion/extensions/llm/inventory/registry'
@@ -17,53 +16,76 @@ require 'legion/extensions/llm/capabilities'
 require 'legion/extensions/llm/fleet/worker_execution'
 require 'legion/extensions/llm/fleet/protocol'
 
-# Stub the actor runtime so discovery_refresh.rb loads the OpenaiCallable class.
-module Legion
-  module Extensions
-    module Actors
-      unless const_defined?(:Every, false)
-        # Stub base class for discovery actor loading in test context
-        class Every
-          def self.every_seconds = 300
-        end
-      end
-    end
-
-    module Helpers
-      module Lex; end unless const_defined?(:Lex, false)
-    end
-  end
-end
-
-# Use `load` instead of `require` because spec_helper already required this
-# file once (before the Every stub existed), so `require` would be a no-op.
-# `load` forces re-evaluation now that the stub is in place.
-load File.expand_path('../../../../lib/legion/extensions/llm/openai/actors/discovery_refresh.rb', __dir__)
-
-# Test-local callable that extends OpenaiCallable with dispatch operations
-# required by FleetWorkerExecution. Tracks inference call count for
-# conformance assertions.
-class TrackingOpenaiCallable < Legion::Extensions::Llm::Openai::OpenaiCallable
+# Spec double standing in for Openai::Provider at the dispatch boundary. The
+# production OpenaiCallable is used verbatim; only the per-instance Provider
+# (the HTTP boundary) is replaced so specs never touch the network.
+class RecordingOpenaiProvider
   attr_reader :call_count
 
-  def initialize(instance_cfg:, logger:)
-    super
+  def initialize
     @call_count = 0
   end
 
-  def chat(model:, **)
+  def chat(**kwargs)
     @call_count += 1
-    { role: 'assistant', content: 'test response', model: model }
+    { role: 'assistant', content: 'test response', model: kwargs[:model] }
+  end
+
+  def stream_chat(**kwargs)
+    @call_count += 1
+    { role: 'assistant', content: 'streamed response', model: kwargs[:model] }
+  end
+
+  def embed(**kwargs)
+    @call_count += 1
+    { embedding: [0.1, 0.2, 0.3], model: kwargs[:model] }
+  end
+
+  def count_tokens(**)
+    @call_count += 1
+    0
+  end
+end
+
+# Captures the exact `model:` value each dispatch op hands to the provider
+# boundary, proving the D15 raw-string-model handling (the counting double
+# above cannot, because it ignores model).
+class ModelCapturingOpenaiProvider
+  attr_reader :received_models
+
+  def initialize
+    @received_models = {}
+  end
+
+  def chat(model:, **)
+    record(:chat, model)
   end
 
   def stream_chat(model:, **)
-    @call_count += 1
-    { role: 'assistant', content: 'streamed response', model: model }
+    record(:stream_chat, model)
   end
 
   def embed(model:, **)
-    @call_count += 1
-    { embedding: [0.1, 0.2, 0.3], model: model }
+    record(:embed, model)
+  end
+
+  def count_tokens(model:, **)
+    record(:count_tokens, model)
+  end
+
+  def image(model:, **)
+    record(:image, model)
+  end
+
+  def moderate(_input, model:, **)
+    record(:moderate, model)
+  end
+
+  private
+
+  def record(operation, model)
+    @received_models[operation] = model
+    {}
   end
 end
 
@@ -77,53 +99,11 @@ class OpenaiInstanceUnavailableSentinel < StandardError
   end
 end
 
-# Evidence-building helpers for the SSOT v3 conformance harness.
-# Extracted to keep OpenaiSsotHarness within class length limits.
+# Spec-local helpers for the SSOT v3 conformance harness. Identity and
+# offering-draft construction delegate to the production actor's real
+# helpers (no harness re-implementation that can drift).
 module OpenaiSsotEvidenceHelpers
   private
-
-  def build_operation_evidence(now:, operations:)
-    Legion::Extensions::Llm::Taxonomies::OPERATIONS.to_h do |op|
-      [op, if operations[op]
-             op_evidence(op, :supported, now)
-           else
-             op_evidence(op, :unsupported, now)
-           end]
-    end
-  end
-
-  def op_evidence(operation, status, observed_at)
-    source = status == :unknown ? :default_false : :provider_implementation
-    Legion::Extensions::Llm::Inventory::OperationEvidence.new(
-      operation: operation, status: status, source: source, observed_at: observed_at
-    )
-  end
-
-  def build_capability_evidence
-    {
-      completion: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :completion, status: :supported, source: :provider_catalog, observed_at: Time.now
-      ),
-      streaming: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :streaming, status: :supported, source: :provider_catalog, observed_at: Time.now
-      ),
-      tools: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :tools, status: :supported, source: :provider_catalog, observed_at: Time.now
-      ),
-      vision: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :vision, status: :supported, source: :provider_catalog, observed_at: Time.now
-      ),
-      thinking: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :thinking, status: :unknown, source: :default_false, observed_at: Time.now
-      ),
-      embedding: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :embedding, status: :unknown, source: :default_false, observed_at: Time.now
-      ),
-      structured_output: Legion::Extensions::Llm::Inventory::CapabilityEvidence.new(
-        capability: :structured_output, status: :supported, source: :provider_catalog, observed_at: Time.now
-      )
-    }
-  end
 
   def model_not_ready_signal?(error:)
     return false unless error.respond_to?(:response) && error.response.is_a?(Hash)
@@ -131,38 +111,12 @@ module OpenaiSsotEvidenceHelpers
     body = error.response[:body].to_s.downcase
     body.include?('model not ready') || body.include?('model is still loading')
   end
-
-  def extract_host_port(base_url:)
-    uri = URI.parse(base_url.to_s)
-    "#{uri.host || 'api.openai.com'}:#{uri.port}"
-  end
-
-  def key_fingerprint_part(api_key)
-    return unless api_key.is_a?(String) && !api_key.strip.empty?
-
-    "ak:#{::Digest::SHA256.hexdigest(api_key)[0, 8]}"
-  end
-
-  def org_project_parts(config)
-    parts = []
-    org = config[:openai_organization_id]
-    parts << "org:#{org.strip}" if org.is_a?(String) && !org.strip.empty?
-    project = config[:openai_project_id]
-    parts << "proj:#{project.strip}" if project.is_a?(String) && !project.strip.empty?
-    parts
-  end
-
-  def credential_identity_parts(instance_config)
-    api_key = instance_config[:openai_api_key] || instance_config[:api_key]
-    parts = [key_fingerprint_part(api_key)]
-    parts.concat(org_project_parts(instance_config))
-    parts.compact
-  end
 end
 
 # Harness class for OpenAI SSOT v3 conformance testing. Implements the full
 # interface required by the shared conformance examples without touching
-# any external service.
+# any external service: the production OpenaiCallable is used, with the
+# per-instance Provider (HTTP boundary) replaced by a recording double.
 class OpenaiSsotHarness
   include OpenaiSsotEvidenceHelpers
 
@@ -187,21 +141,30 @@ class OpenaiSsotHarness
   def instance_configs = INSTANCE_CONFIGS
 
   def instance_id(instance_config:)
-    base_url = instance_config[:openai_api_base] || instance_config[:endpoint] || 'https://api.openai.com'
-    host_port = extract_host_port(base_url: base_url)
-    parts = [host_port] + credential_identity_parts(instance_config)
-    parts.join('/')
+    discovery_actor.send(:derive_instance_id, instance_cfg: instance_config)
   end
 
   def build_callable(instance_config:)
-    TrackingOpenaiCallable.new(instance_cfg: instance_config, logger: Logger.new(File::NULL))
+    Legion::Extensions::Llm::Openai::OpenaiCallable.new(
+      instance_cfg: instance_config,
+      logger: Logger.new(File::NULL),
+      provider: RecordingOpenaiProvider.new
+    )
   end
 
   def build_offering_drafts(tier: :frontier, **)
-    now = Time.now.freeze
-    model_id = 'gpt-4o'
-    operations = { chat: true, stream_chat: true }
-    [build_single_offering(model_id: model_id, tier: tier, now: now, operations: operations)]
+    config = instance_configs.first
+    instance_key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+      provider_family: provider_family,
+      instance_id: instance_id(instance_config: config)
+    )
+    [discovery_actor.send(
+      :build_offering_draft,
+      model_id: 'gpt-4o',
+      model_data: {},
+      instance_cfg: config.merge(tier: tier),
+      instance_key: instance_key
+    )]
   end
 
   def safe_readiness(instance_config:, **)
@@ -213,7 +176,7 @@ class OpenaiSsotHarness
   end
 
   def inference_call_count(callable:)
-    callable.respond_to?(:call_count) ? callable.call_count : 0
+    callable.provider.call_count
   end
 
   def normalize_dispatch_error(error:)
@@ -259,30 +222,11 @@ class OpenaiSsotHarness
     outcome
   end
 
-  def build_single_offering(model_id:, tier:, now:, operations:)
-    quota_domains = operations.each_key.to_h do |op|
-      [op, 'org:org-alpha/proj:proj-001']
-    end
-
-    Legion::Extensions::Llm::Inventory::OfferingDraft.new(
-      provider_native_key: model_id, model: model_id, tier: tier,
-      operation_evidence: build_operation_evidence(now: now, operations: operations),
-      capability_evidence: build_capability_evidence,
-      context_evidence: Legion::Extensions::Llm::Inventory::ValueEvidence.new(
-        status: :known, value: 128_000, source: :provider_catalog
-      ),
-      max_output_evidence: Legion::Extensions::Llm::Inventory::ValueEvidence.new(status: :unknown, source: :absent),
-      embedding_dimensions_evidence: Legion::Extensions::Llm::Inventory::ValueEvidence.new(
-        status: :unknown, source: :absent
-      ),
-      model_revision_evidence: Legion::Extensions::Llm::Inventory::ValueEvidence.new(
-        status: :unknown, source: :absent
-      ),
-      tokenizer_evidence: Legion::Extensions::Llm::Inventory::ValueEvidence.new(status: :unknown, source: :absent),
-      quota_domains: quota_domains,
-      metadata: { raw_model: model_id }.freeze,
-      publication_source: :provider_catalog
-    )
+  # Production discovery actor used as the source of the real identity and
+  # offering-draft helpers (no timer: the spec stub of Every has no
+  # initialize, so instances are inert until driven manually).
+  def discovery_actor
+    @discovery_actor ||= Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh.new
   end
 end
 
@@ -762,6 +706,56 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       error = RuntimeError.new(long_message)
       outcome = callable.normalize_dispatch_error(error: error)
       expect(outcome.reason.length).to be <= 1024
+    end
+
+    describe 'fleet raw-string model (D15)' do
+      # The fleet passes model: as the offering's raw model id (String). The
+      # chat/stream_chat render path calls model.id, so the callable must hand
+      # the provider a Model::Info; the wire-payload ops (image, moderate) and
+      # the model-tolerant ops (embed, count_tokens) must receive the value
+      # verbatim.
+      let(:capturing) { ModelCapturingOpenaiProvider.new }
+      let(:capturing_callable) do
+        described_class.new(
+          instance_cfg: ssot_harness.instance_configs[0],
+          logger: Logger.new(File::NULL),
+          provider: capturing
+        )
+      end
+
+      it 'wraps a raw string model into a Model::Info for chat' do
+        capturing_callable.chat(messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o')
+
+        model = capturing.received_models[:chat]
+        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
+        expect(model.id).to eq('gpt-4o')
+      end
+
+      it 'wraps a raw string model into a Model::Info for stream_chat' do
+        capturing_callable.stream_chat(messages: [], model: 'gpt-4o')
+
+        model = capturing.received_models[:stream_chat]
+        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
+        expect(model.id).to eq('gpt-4o')
+      end
+
+      it 'passes a Model::Info through unchanged for chat' do
+        info = Legion::Extensions::Llm::Model::Info.new(id: 'gpt-4o', provider: :openai)
+        capturing_callable.chat(messages: [], model: info)
+        expect(capturing.received_models[:chat]).to equal(info)
+      end
+
+      it 'passes the raw model verbatim for ops that render it into the wire payload or ignore it' do
+        capturing_callable.embed(text: 'hello', model: 'text-embedding-3-small')
+        capturing_callable.count_tokens(messages: [], model: 'gpt-4o')
+        capturing_callable.image(prompt: 'a cat', model: 'gpt-image-1', size: '1024x1024')
+        capturing_callable.moderate('hello', model: 'omni-moderation-latest')
+
+        expect(capturing.received_models[:embed]).to eq('text-embedding-3-small')
+        expect(capturing.received_models[:count_tokens]).to eq('gpt-4o')
+        expect(capturing.received_models[:image]).to eq('gpt-image-1')
+        expect(capturing.received_models[:moderate]).to eq('omni-moderation-latest')
+      end
     end
   end
 

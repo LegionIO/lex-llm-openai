@@ -6,6 +6,9 @@ require 'legion/extensions/llm'
 
 Legion::Logging.setup(level: 'fatal', log_file: File::NULL, log_stdout: false, async: false)
 
+# The discovery actor fails loud when the LegionIO actor runtime is missing;
+# stub the runtime surface before the gem loads so the actor class loads.
+require_relative 'support/actor_runtime_stubs'
 require 'legion/extensions/llm/openai'
 
 # Load the conformance kit from the installed lex-llm gem.

@@ -5,7 +5,6 @@ require 'spec_helper'
 RSpec.describe Legion::Extensions::Llm::Openai do
   let(:provider) { described_class::Provider.new(Legion::Extensions::Llm.config) }
   let(:chat_model) { Legion::Extensions::Llm::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
-  let(:registry_publisher) { instance_double(Legion::Extensions::Llm::RegistryPublisher) }
 
   before do
     Legion::Extensions::Llm.config.openai_api_key = 'test-key'
@@ -83,13 +82,13 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   it 'does not call publish_models_async (single SSOT v3 publication path via DiscoveryRefresh actor)' do
     # §5: discover_offerings is a catalog query only. Publication is the
     # exclusive responsibility of the DiscoveryRefresh actor via
-    # Inventory::Publisher — not a second RegistryPublisher call here.
-    stub_registry_publisher
+    # Inventory::Publisher — not a second RegistryPublisher call here. The
+    # override never references a registry publisher (the base class method
+    # is absent from the class, asserted below).
     stub_model_discovery
 
     offerings = provider.discover_offerings(live: true)
 
-    expect(registry_publisher).not_to have_received(:publish_models_async)
     expect(offerings).not_to be_empty
   end
 
@@ -229,11 +228,6 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   def fake_response(body)
     Struct.new(:body).new(body)
-  end
-
-  def stub_registry_publisher
-    allow(described_class::Provider).to receive(:registry_publisher).and_return(registry_publisher)
-    allow(registry_publisher).to receive(:publish_models_async)
   end
 
   def stub_model_discovery

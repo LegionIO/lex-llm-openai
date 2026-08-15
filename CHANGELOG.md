@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **D1 Callable dispatch** — `OpenaiCallable` now implements the fleet dispatch ops (`chat`, `stream_chat`, `embed`, `count_tokens`, `image`, `moderate`) by delegating to a per-instance `Openai::Provider` (previously `NotImplementedError` stubs); errors propagate for `normalize_dispatch_error`; `disconnect` closes the Provider. Optional `provider:` injection seam for specs (production builds the real Provider lazily).
+- **D15 Raw-string model at the dispatch boundary** — the fleet passes `model:` as the offering's raw id (String). `chat`/`stream_chat` render paths call `model.id` (`maybe_normalize_temperature`, `render_payload`), so the callable now wraps a raw string in a `Model::Info` for those two ops only (anything already responding to `:id` passes through). `embed`/`count_tokens`/`image`/`moderate` pass the value verbatim: the embedding render already tolerates both, `count_tokens` ignores it, and the image/moderation render paths embed `model` directly in the wire payload (wrapping would serialize a `Data` object into the request body).
+- **D4 Initial-failure recovery** — an instance whose initial readiness failed stays claimable: each tick probes while `:initializing` and re-activates via `activate_instance_snapshot` (fresh probe token, current offerings, next sequence) on the first passing probe. Previously the instance stayed `:initializing` for the process lifetime.
+- **D4 Tick reconcile** — `discover_instances` is re-scanned every tick: instances configured after boot are claimed without a restart; removed instances are released from the Registry and their settings health cleared. Credential-less candidates (e.g. the synthetic `instances.default` placeholder) are skipped with a warn, not claimed.
+- **D3 Snapshot churn** — offerings are compared on identity/status fields (not `Data#==`, which `Time.now` `observed_at` stamps poison) so an unchanged catalog no longer triggers `replace_instance_snapshot` every tick.
+- **Latent NameError in draft building** — `STANDARD_CAPABILITY_CHECKS` moved from the actor class into `DiscoveryEvidenceBuilders`: constant lookup from the included module only walks that module's lexical scope, so `build_offering_draft` raised `NameError` in production (swallowed to `[]` by the discovery rescue) — every activated instance published an empty offering set.
+- **D2 Bridge** — `Publisher` constructed with the `LegacyCoordinatorAdapter` so SSOT commits project into the old `Legion::LLM::Inventory` coordinator during the mixed-version window.
+- **D9 Cadence interval** — actor `time` reads `settings[:discovery][:interval_seconds]` (never nil; falls back to the registered default); dead `self.every_seconds` removed.
+- **D13 Fleet dispatch** — fleet `Subscription` actor sets `use_runner? = true` (Legion::Runner.run resolves the String runner class; the direct `runner_class.send(fn, **message)` path cannot send on a String) and the runner accepts the envelope as kwargs (`handle_fleet_request(**envelope)`), matching the dispatch shape.
+- **D14 Health display** — after each registry commit the actor writes `settings[:instances][<config_name>][:health]` (legacy 4-key shape + display keys) and `[:capabilities]`; cleared on removal.
+- **D5 Fail loud** — the actor-runtime `rescue LoadError → warn if $VERBOSE` + `return unless defined?` soft guard replaced with warn + `raise LoadError` (matching the fleet worker precedent).
+- **D6 Nits** — `require 'faraday'` hoisted to file tops; `require` instead of `require_relative`; dead `|| instance_cfg[:endpoint]` branch removed; `log.debug` block form; dead `stub_registry_publisher` spec helper removed.
+- **Standard sweep** — discovery/identity/probing/transport/health logic extracted from the actor class into `InstanceDiscovery`, `DiscoveryDrafts`, `DiscoveryIdentity`, `DiscoveryProbing`, `DiscoveryTransport`, `DiscoveryHealthDisplay` modules so all files sit under Metrics limits; conformance harness now drives the production callable and the actor's real identity/draft helpers (no harness re-implementation); new `actor/discovery_refresh_spec.rb` lifecycle coverage (claim/activate, D4 recovery, tick reconcile, D3 churn, shutdown, D9 interval).
+- **legion-settings floor bumped to >= 1.4.2** — nested-extension settings-path resolution: the actor's `settings[:...]` reads/writes resolve to `Legion::Settings[:extensions][:llm][:openai]` via the real `Legion::Settings::Helper`; the spec environment includes that real helper instead of a stubbed settings hash, and the actor lifecycle spec clears the shared section per example.
+
 ## [0.6.1] - 2026-08-13
 
 ### Fixed
