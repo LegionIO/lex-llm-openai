@@ -40,6 +40,13 @@ module Legion
           # Claims configured instances, discovers models via /v1/models,
           # probes readiness via /v1/models, and publishes complete
           # OfferingDraft snapshots through the Inventory::Publisher.
+          #
+          # Instance identity is the operator's CONFIG NAME
+          # (InstanceKey.instance_id) — the key the router uses for
+          # instances.<name> settings lookups and per-instance tuning. The
+          # derived host:port/credential-fingerprint is the secondary
+          # physical_id (dedup/diagnostics only); two config names at the
+          # same endpoint stay distinct instances.
           class DiscoveryRefresh < Legion::Extensions::Actors::Every
             include Legion::Extensions::Helpers::Lex
             include Legion::Logging::Helper
@@ -122,12 +129,11 @@ module Legion
 
             def claim_new_instances(discovered)
               discovered.each do |name, instance_cfg|
-                instance_id = derive_instance_id(instance_cfg: instance_cfg)
-                next if @instance_states.key?(instance_id)
+                next if @instance_states.key?(name.to_s)
                 next unless claimable_instance?(name: name, instance_cfg: instance_cfg)
 
-                @instance_states[instance_id] = build_instance_context(
-                  name: name, instance_id: instance_id, instance_cfg: instance_cfg
+                @instance_states[name.to_s] = build_instance_context(
+                  name: name, instance_cfg: instance_cfg
                 )
               rescue StandardError => e
                 handle_exception(e, level: :warn, operation: 'openai.actor.claim_instance',
@@ -136,8 +142,8 @@ module Legion
             end
 
             def release_removed_instances(discovered)
-              discovered_ids = discovered.values.map { |cfg| derive_instance_id(instance_cfg: cfg) }.uniq
-              (@instance_states.keys - discovered_ids).each { |instance_id| remove_instance_state(instance_id) }
+              discovered_names = discovered.keys.map(&:to_s)
+              (@instance_states.keys - discovered_names).each { |instance_id| remove_instance_state(instance_id) }
             end
 
             def claimable_instance?(name:, instance_cfg:)
@@ -151,22 +157,25 @@ module Legion
               valid_string?(instance_cfg[:openai_api_key] || instance_cfg[:api_key])
             end
 
-            def build_instance_context(name:, instance_id:, instance_cfg:)
+            def build_instance_context(name:, instance_cfg:)
+              physical_id = derive_physical_id(instance_cfg: instance_cfg)
               instance_key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-                provider_family: :openai, instance_id: instance_id
+                provider_family: :openai, instance_id: name.to_s, physical_id: physical_id
               )
               callable = Legion::Extensions::Llm::Openai::OpenaiCallable.new(instance_cfg: instance_cfg, logger: log)
               probe_coordinator = Legion::Extensions::Llm::Inventory::ProbeCoordinator.new(
                 instance_key: instance_key,
-                enqueue: build_probe_enqueue(instance_id: instance_id)
+                enqueue: build_probe_enqueue(instance_id: name.to_s)
               )
               publisher_token = publisher.claim_instance(
-                instance_id: instance_id,
+                instance_id: name.to_s,
+                physical_id: physical_id,
                 callable: callable,
                 probe_request_handle: probe_coordinator
               )
               {
-                name: name, instance_key: instance_key, instance_cfg: instance_cfg,
+                name: name, instance_key: instance_key, physical_id: physical_id,
+                instance_cfg: instance_cfg,
                 callable: callable, probe_coordinator: probe_coordinator,
                 publisher_token: publisher_token, sequence: 0, last_probe_outcome: nil,
                 offerings: discover_offerings_for_instance(instance_cfg: instance_cfg, instance_key: instance_key)
@@ -196,6 +205,7 @@ module Legion
 
               probe_token = publisher.readiness_probe_started(
                 instance_id: instance_id,
+                physical_id: state[:physical_id],
                 publisher_token: state[:publisher_token]
               )
               readiness = check_readiness(instance_cfg: state[:instance_cfg])
@@ -231,6 +241,7 @@ module Legion
               state[:last_probe_outcome] = :success
               publisher.activate_instance_snapshot(
                 instance_id: instance_id,
+                physical_id: state[:physical_id],
                 publisher_token: state[:publisher_token],
                 offerings: state[:offerings],
                 sequence: state[:sequence],
@@ -245,7 +256,10 @@ module Legion
 
             def report_initial_failure(instance_id:, state:, probe_token:, reason:)
               state[:last_probe_outcome] = :failure
-              publisher.readiness_failed(instance_id: instance_id, probe_token: probe_token, reason: reason)
+              publisher.readiness_failed(
+                instance_id: instance_id, physical_id: state[:physical_id],
+                probe_token: probe_token, reason: reason
+              )
               write_instance_health(
                 config_name: state[:name], available: false, reason: reason,
                 probe_outcome: :failure, source: :startup_readiness
@@ -262,6 +276,7 @@ module Legion
                 state[:sequence] += 1
                 publisher.replace_instance_snapshot(
                   instance_id: instance_id,
+                  physical_id: state[:physical_id],
                   publisher_token: state[:publisher_token],
                   offerings: new_offerings,
                   sequence: state[:sequence]
@@ -282,7 +297,11 @@ module Legion
               state = @instance_states.delete(instance_id)
               return unless state
 
-              publisher.remove_instance(instance_id: instance_id, publisher_token: state[:publisher_token])
+              publisher.remove_instance(
+                instance_id: instance_id,
+                physical_id: state[:physical_id],
+                publisher_token: state[:publisher_token]
+              )
               clear_instance_health(config_name: state[:name])
             rescue StandardError => e
               handle_exception(e, level: :warn, operation: 'openai.actor.remove_instance',

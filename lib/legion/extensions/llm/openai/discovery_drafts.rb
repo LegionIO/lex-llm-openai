@@ -47,7 +47,8 @@ module Legion
           def build_offering_metadata(model_id:, instance_key:)
             {
               raw_model: model_id,
-              instance_id: instance_key.instance_id
+              instance_id: instance_key.instance_id,
+              physical_id: instance_key.physical_id
             }
           end
 

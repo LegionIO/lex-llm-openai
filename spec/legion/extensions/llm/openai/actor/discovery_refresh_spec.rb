@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'digest'
 require 'spec_helper'
 require 'faraday'
 
@@ -46,10 +47,13 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
     allow(actor).to receive(:build_api_connection).and_return(connection)
   end
 
-  def key_for(cfg)
+  # The registry key for a discovered instance: the operator's CONFIG NAME as
+  # identity, the derived endpoint/credential id as the secondary physical_id.
+  def key_for(cfg, name: :alpha)
     Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
       provider_family: :openai,
-      instance_id: actor.send(:derive_instance_id, instance_cfg: cfg)
+      instance_id: name.to_s,
+      physical_id: actor.send(:derive_physical_id, instance_cfg: cfg)
     )
   end
 
@@ -93,6 +97,31 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
     end
   end
 
+  describe 'config-name identity' do
+    it 'publishes the config name as instance_id and the derived endpoint as physical_id' do
+      stub_models
+      actor.manual
+
+      record = registry.snapshot.each_instance.to_a.first
+      expect(record.instance_key.instance_id).to eq('alpha')
+      fingerprint = Digest::SHA256.hexdigest('sk-lifecycle-alpha')[0, 8]
+      expect(record.instance_key.physical_id).to eq("api.openai.com:443/ak:#{fingerprint}/org:org-alpha")
+    end
+
+    it 'keeps two config names pointing at the same endpoint as distinct instances' do
+      stub_models
+      allow(Legion::Extensions::Llm::Openai).to receive(:discover_instances)
+        .and_return({ alpha: alpha_cfg, beta: alpha_cfg })
+      actor.manual
+
+      alpha_record = registry.snapshot.instance(instance_key: key_for(alpha_cfg, name: :alpha))
+      beta_record = registry.snapshot.instance(instance_key: key_for(alpha_cfg, name: :beta))
+      expect(alpha_record.availability.state).to eq(:available)
+      expect(beta_record.availability.state).to eq(:available)
+      expect(registry.snapshot.each_instance.to_a.size).to eq(2)
+    end
+  end
+
   describe 'recovery of a stuck-initializing instance (D4)' do
     it 're-activates on a later passing readiness probe and heals the catalog' do
       stub_models_unreachable
@@ -123,7 +152,8 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
         .and_return({ alpha: alpha_cfg, beta: beta_cfg })
       actor.manual
 
-      expect(registry.snapshot.instance(instance_key: key_for(beta_cfg)).availability.state).to eq(:available)
+      beta_record = registry.snapshot.instance(instance_key: key_for(beta_cfg, name: :beta))
+      expect(beta_record.availability.state).to eq(:available)
     end
 
     it 'removes instances that disappear from configuration' do
@@ -135,7 +165,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
       allow(Legion::Extensions::Llm::Openai).to receive(:discover_instances).and_return({ alpha: alpha_cfg })
       actor.manual
 
-      expect(registry.snapshot.instance(instance_key: key_for(beta_cfg))).to be_nil
+      expect(registry.snapshot.instance(instance_key: key_for(beta_cfg, name: :beta))).to be_nil
       expect(actor.settings.dig(:instances, :beta, :health)).to be_nil
       expect(actor.settings.dig(:instances, :beta, :capabilities)).to be_nil
     end

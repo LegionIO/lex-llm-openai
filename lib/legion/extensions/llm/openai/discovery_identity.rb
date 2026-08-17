@@ -7,14 +7,21 @@ module Legion
   module Extensions
     module Llm
       module Openai
-        # Instance identity and endpoint derivation for DiscoveryRefresh.
-        # Extracted to keep the main class within Metrics limits. The derived
-        # instance_id identifies the exact endpoint + credential that can
-        # independently become unavailable — never a provider-family fallback.
+        # Secondary physical-id derivation for DiscoveryRefresh. Extracted to
+        # keep the main class within Metrics limits.
+        #
+        # The instance IDENTITY is the operator's CONFIG NAME
+        # (InstanceKey.instance_id) — the key the router uses for settings
+        # lookups (instances.<name>) and per-instance tuning. The derived
+        # host:port/credential-fingerprint value is the SECONDARY physical id
+        # (InstanceKey.physical_id): it identifies the exact endpoint +
+        # credential that can independently become unavailable, and is kept
+        # for dedup and diagnostics. It is never the identity — two config
+        # names pointing at the same endpoint stay distinct instances.
         module DiscoveryIdentity
           private
 
-          def derive_instance_id(instance_cfg:)
+          def derive_physical_id(instance_cfg:)
             base_url = api_base_for(instance_cfg)
             host_port = extract_host_port(url: base_url)
             parts = [host_port]

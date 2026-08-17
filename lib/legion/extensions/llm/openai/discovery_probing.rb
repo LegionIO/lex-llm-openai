@@ -48,6 +48,7 @@ module Legion
 
             probe_token = publisher.readiness_probe_started(
               instance_id: instance_id,
+              physical_id: state[:physical_id],
               publisher_token: state[:publisher_token]
             )
 
@@ -75,6 +76,7 @@ module Legion
 
             probe_token = publisher.readiness_probe_started(
               instance_id: instance_id,
+              physical_id: state[:physical_id],
               publisher_token: state[:publisher_token]
             )
 
@@ -95,14 +97,19 @@ module Legion
 
           def report_probe_result(instance_id:, probe_token:, readiness:, state:)
             if readiness.ready?
-              publisher.readiness_succeeded(instance_id: instance_id, probe_token: probe_token)
+              publisher.readiness_succeeded(
+                instance_id: instance_id, physical_id: state[:physical_id], probe_token: probe_token
+              )
               state[:last_probe_outcome] = :success
               write_instance_health(
                 config_name: state[:name], available: true, reason: 'readiness probe succeeded',
                 probe_outcome: :success, source: :readiness_probe
               )
             else
-              publisher.readiness_failed(instance_id: instance_id, probe_token: probe_token, reason: readiness.reason)
+              publisher.readiness_failed(
+                instance_id: instance_id, physical_id: state[:physical_id],
+                probe_token: probe_token, reason: readiness.reason
+              )
               state[:last_probe_outcome] = :failure
               write_instance_health(
                 config_name: state[:name], available: false, reason: readiness.reason,

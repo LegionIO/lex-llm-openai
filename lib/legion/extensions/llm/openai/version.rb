@@ -4,7 +4,7 @@ module Legion
   module Extensions
     module Llm
       module Openai
-        VERSION = '0.6.1'
+        VERSION = '0.6.2'
       end
     end
   end

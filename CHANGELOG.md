@@ -1,8 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.2] - 2026-08-17
 
 ### Fixed
+- **Instance identity is the operator's config name** — `InstanceKey.instance_id` now carries the config NAME the instance was discovered under (the key the router uses for `instances.<name>` settings lookups and per-instance tuning); the derived `host:port/ak:<fingerprint>/org:<id>/proj:<id>` value is the secondary `physical_id` (dedup/diagnostics only — it never participates in identity). Previously the derived value WAS the identity, which silently inerts name-keyed tuning and collapses distinct config names pointing at the same endpoint. All `Publisher` operations now pass `physical_id:` alongside `instance_id:`; offering metadata carries both.
+- **Authoritative operation evidence verified** — embedding models (`text-embedding-*`) publish `chat: :unsupported` (not `:unknown`, not `:supported`) so a plain chat request cannot misroute to an embedding model; pinned by spec.
 - **D1 Callable dispatch** — `OpenaiCallable` now implements the fleet dispatch ops (`chat`, `stream_chat`, `embed`, `count_tokens`, `image`, `moderate`) by delegating to a per-instance `Openai::Provider` (previously `NotImplementedError` stubs); errors propagate for `normalize_dispatch_error`; `disconnect` closes the Provider. Optional `provider:` injection seam for specs (production builds the real Provider lazily).
 - **D15 Raw-string model at the dispatch boundary** — the fleet passes `model:` as the offering's raw id (String). `chat`/`stream_chat` render paths call `model.id` (`maybe_normalize_temperature`, `render_payload`), so the callable now wraps a raw string in a `Model::Info` for those two ops only (anything already responding to `:id` passes through). `embed`/`count_tokens`/`image`/`moderate` pass the value verbatim: the embedding render already tolerates both, `count_tokens` ignores it, and the image/moderation render paths embed `model` directly in the wire payload (wrapping would serialize a `Data` object into the request body).
 - **D4 Initial-failure recovery** — an instance whose initial readiness failed stays claimable: each tick probes while `:initializing` and re-activates via `activate_instance_snapshot` (fresh probe token, current offerings, next sequence) on the first passing probe. Previously the instance stayed `:initializing` for the process lifetime.
@@ -17,6 +19,10 @@
 - **D6 Nits** — `require 'faraday'` hoisted to file tops; `require` instead of `require_relative`; dead `|| instance_cfg[:endpoint]` branch removed; `log.debug` block form; dead `stub_registry_publisher` spec helper removed.
 - **Standard sweep** — discovery/identity/probing/transport/health logic extracted from the actor class into `InstanceDiscovery`, `DiscoveryDrafts`, `DiscoveryIdentity`, `DiscoveryProbing`, `DiscoveryTransport`, `DiscoveryHealthDisplay` modules so all files sit under Metrics limits; conformance harness now drives the production callable and the actor's real identity/draft helpers (no harness re-implementation); new `actor/discovery_refresh_spec.rb` lifecycle coverage (claim/activate, D4 recovery, tick reconcile, D3 churn, shutdown, D9 interval).
 - **legion-settings floor bumped to >= 1.4.2** — nested-extension settings-path resolution: the actor's `settings[:...]` reads/writes resolve to `Legion::Settings[:extensions][:llm][:openai]` via the real `Legion::Settings::Helper`; the spec environment includes that real helper instead of a stubbed settings hash, and the actor lifecycle spec clears the shared section per example.
+- **lex-llm floor bumped to >= 0.7.1** — the fail-forward identity contract first shipped in lex-llm 0.7.1: `InstanceKey` gains the optional secondary `physical_id` member (0.7.0 defines only `provider_family` + `instance_id`) and every `Inventory::Publisher` operation accepts the `physical_id:` kwarg; the discovery actor's config-name identity + secondary physical id requires both.
+
+### Changed
+- **Model-scoped capability overrides resolve through the shared `SettingsCascade`** — the lex-llm foundation removed the `config.models` accessor path; `model_capability_config` now reads the `models.<model>` config scope (provider leg, then instance leg) via the cascade. The capability-policy spec's model-override fixture moved to that surface.
 
 ## [0.6.1] - 2026-08-13
 

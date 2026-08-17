@@ -120,6 +120,10 @@ end
 class OpenaiSsotHarness
   include OpenaiSsotEvidenceHelpers
 
+  # The operator's CONFIG NAMES — the instance identity the router keys
+  # settings lookups (instances.<name>) by. Index-aligned with INSTANCE_CONFIGS.
+  INSTANCE_NAMES = %w[openai-primary openai-proxy].freeze
+
   INSTANCE_CONFIGS = [
     {
       openai_api_base: 'https://api.openai.com',
@@ -140,8 +144,25 @@ class OpenaiSsotHarness
   def provider_family = :openai
   def instance_configs = INSTANCE_CONFIGS
 
+  # The instance IDENTITY is the operator's config name, exactly as the
+  # production discovery actor publishes it.
   def instance_id(instance_config:)
-    discovery_actor.send(:derive_instance_id, instance_cfg: instance_config)
+    name_for(instance_config)
+  end
+
+  # The SECONDARY physical id (dedup/diagnostics only, never identity):
+  # the derived host:port/credential-fingerprint, delegated to the
+  # production actor's real helper.
+  def physical_id(instance_config:)
+    discovery_actor.send(:derive_physical_id, instance_cfg: instance_config)
+  end
+
+  def build_instance_key(instance_config:)
+    Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+      provider_family: provider_family,
+      instance_id: instance_id(instance_config: instance_config),
+      physical_id: physical_id(instance_config: instance_config)
+    )
   end
 
   def build_callable(instance_config:)
@@ -152,18 +173,14 @@ class OpenaiSsotHarness
     )
   end
 
-  def build_offering_drafts(tier: :frontier, **)
-    config = instance_configs.first
-    instance_key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-      provider_family: provider_family,
-      instance_id: instance_id(instance_config: config)
-    )
+  def build_offering_drafts(tier: :frontier, instance_config: nil, **)
+    config = instance_config || instance_configs.first
     [discovery_actor.send(
       :build_offering_draft,
       model_id: 'gpt-4o',
       model_data: {},
       instance_cfg: config.merge(tier: tier),
-      instance_key: instance_key
+      instance_key: build_instance_key(instance_config: config)
     )]
   end
 
@@ -228,6 +245,13 @@ class OpenaiSsotHarness
   def discovery_actor
     @discovery_actor ||= Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh.new
   end
+
+  def name_for(instance_config)
+    index = INSTANCE_CONFIGS.index(instance_config)
+    raise ArgumentError, 'unknown instance config' if index.nil?
+
+    INSTANCE_NAMES[index]
+  end
 end
 
 RSpec.describe Legion::Extensions::Llm::Openai do
@@ -236,12 +260,30 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   before { registry.reset! }
 
+  # Shared by the local bring-up helpers: readiness probe + snapshot
+  # activation through the public Publisher API (name identity + physical id).
+  def probe_and_activate(publisher:, key:, token:, drafts:)
+    probe = publisher.readiness_probe_started(
+      instance_id: key.instance_id, physical_id: key.physical_id, publisher_token: token
+    )
+    publisher.activate_instance_snapshot(
+      instance_id: key.instance_id, physical_id: key.physical_id,
+      publisher_token: token, offerings: drafts, sequence: 0, probe_token: probe
+    )
+  end
+
   it_behaves_like 'an SSOT v3 provider adapter'
 
   # --- OpenAI-specific identity derivation -----------------------------------
 
   describe 'instance identity derivation' do
-    it 'derives instance_id as host:port/ak:fingerprint/org:X/proj:Y' do
+    it 'uses the operator config name as the instance_id' do
+      ssot_harness.instance_configs.each_with_index do |config, index|
+        expect(ssot_harness.instance_id(instance_config: config)).to eq(OpenaiSsotHarness::INSTANCE_NAMES[index])
+      end
+    end
+
+    it 'derives physical_id as host:port/ak:fingerprint/org:X/proj:Y' do
       config = {
         openai_api_base: 'https://api.openai.com',
         openai_api_key: 'sk-test-key-alpha',
@@ -250,37 +292,48 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       }
       fingerprint = Digest::SHA256.hexdigest('sk-test-key-alpha')[0, 8]
       expected = "api.openai.com:443/ak:#{fingerprint}/org:org-alpha/proj:proj-001"
-      expect(ssot_harness.instance_id(instance_config: config)).to eq(expected)
+      expect(ssot_harness.physical_id(instance_config: config)).to eq(expected)
     end
 
-    it 'derives instance_id without org/project when not configured' do
+    it 'derives physical_id without org/project when not configured' do
       config = {
         openai_api_base: 'https://api.openai.com',
         openai_api_key: 'sk-test-key-alpha'
       }
       fingerprint = Digest::SHA256.hexdigest('sk-test-key-alpha')[0, 8]
       expected = "api.openai.com:443/ak:#{fingerprint}"
-      expect(ssot_harness.instance_id(instance_config: config)).to eq(expected)
+      expect(ssot_harness.physical_id(instance_config: config)).to eq(expected)
     end
 
-    it 'produces distinct instance IDs for two different endpoints/credentials' do
+    it 'produces distinct instance IDs for two different config names' do
       ids = ssot_harness.instance_configs.map { |cfg| ssot_harness.instance_id(instance_config: cfg) }
       expect(ids.uniq.size).to eq(2)
     end
 
-    it 'reproduces the same instance_id across multiple calls (stable identity)' do
+    it 'reproduces the same identity across multiple calls (stable identity)' do
       config = ssot_harness.instance_configs.first
       id_a = ssot_harness.instance_id(instance_config: config)
       id_b = ssot_harness.instance_id(instance_config: config)
       expect(id_a).to eq(id_b)
     end
 
-    it 'distinguishes two keys against the same endpoint via fingerprint' do
+    it 'distinguishes two credentials against the same endpoint via the physical fingerprint' do
       config_a = { openai_api_base: 'https://api.openai.com', openai_api_key: 'sk-key-one' }
       config_b = { openai_api_base: 'https://api.openai.com', openai_api_key: 'sk-key-two' }
-      id_a = ssot_harness.instance_id(instance_config: config_a)
-      id_b = ssot_harness.instance_id(instance_config: config_b)
-      expect(id_a).not_to eq(id_b)
+      expect(ssot_harness.physical_id(instance_config: config_a)).not_to eq(
+        ssot_harness.physical_id(instance_config: config_b)
+      )
+    end
+
+    it 'keeps physical_id out of InstanceKey identity (same name, different physical id = equal)' do
+      key_a = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+        provider_family: :openai, instance_id: 'openai-primary', physical_id: 'api.openai.com:443/ak:aaaa'
+      )
+      key_b = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+        provider_family: :openai, instance_id: 'openai-primary', physical_id: 'api.openai.com:443/ak:bbbb'
+      )
+      expect(key_a).to eq(key_b)
+      expect(key_a.hash).to eq(key_b.hash)
     end
   end
 
@@ -289,21 +342,17 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   describe 'two OpenAI instances serving the same model' do
     def bring_up_instance(config, tier: :frontier)
       publisher = Legion::Extensions::Llm::Inventory::Publisher.new(provider_family: :openai)
-      instance_id = ssot_harness.instance_id(instance_config: config)
-      key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-        provider_family: :openai, instance_id: instance_id
-      )
+      key = ssot_harness.build_instance_key(instance_config: config)
       callable = ssot_harness.build_callable(instance_config: config)
       coordinator = Legion::Extensions::Llm::Inventory::ProbeCoordinator.new(
         instance_key: key, enqueue: ->(**) { true }
       )
-
-      token = publisher.claim_instance(instance_id: instance_id, callable: callable, probe_request_handle: coordinator)
-      probe = publisher.readiness_probe_started(instance_id: instance_id, publisher_token: token)
-      drafts = ssot_harness.build_offering_drafts(instance_config: config, callable: callable, tier: tier)
-      publisher.activate_instance_snapshot(
-        instance_id: instance_id, publisher_token: token, offerings: drafts, sequence: 0, probe_token: probe
+      token = publisher.claim_instance(
+        instance_id: key.instance_id, physical_id: key.physical_id,
+        callable: callable, probe_request_handle: coordinator
       )
+      drafts = ssot_harness.build_offering_drafts(instance_config: config, callable: callable, tier: tier)
+      probe_and_activate(publisher: publisher, key: key, token: token, drafts: drafts)
 
       { publisher: publisher, key: key, callable: callable, token: token, drafts: drafts, coordinator: coordinator }
     end
@@ -384,6 +433,41 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
   end
 
+  # --- Authoritative operation evidence (embedding models) --------------------
+
+  describe 'authoritative operation evidence (embedding models)' do
+    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+
+    it 'publishes embed :supported and chat :unsupported for text-embedding models' do
+      actor = actor_class.allocate
+      config = ssot_harness.instance_configs.first
+      key = ssot_harness.build_instance_key(instance_config: config)
+      draft = actor.send(
+        :build_offering_draft,
+        model_id: 'text-embedding-3-small', model_data: {}, instance_cfg: config, instance_key: key
+      )
+
+      expect(draft.operation_evidence[:embed].status).to eq(:supported)
+      # Authoritative exclusion (not :unknown): a plain chat request must not
+      # be able to route to an embedding model.
+      expect(draft.operation_evidence[:chat].status).to eq(:unsupported)
+      expect(draft.operation_evidence[:stream_chat].status).to eq(:unsupported)
+    end
+
+    it 'publishes chat :supported for chat models' do
+      actor = actor_class.allocate
+      config = ssot_harness.instance_configs.first
+      key = ssot_harness.build_instance_key(instance_config: config)
+      draft = actor.send(
+        :build_offering_draft,
+        model_id: 'gpt-4o', model_data: {}, instance_cfg: config, instance_key: key
+      )
+
+      expect(draft.operation_evidence[:chat].status).to eq(:supported)
+      expect(draft.operation_evidence[:embed].status).to eq(:unsupported)
+    end
+  end
+
   # --- Quota domain from org/project -----------------------------------------
 
   describe 'quota domain derivation' do
@@ -427,10 +511,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     def gating_config = ssot_harness.instance_configs[0]
 
     def gating_key
-      @gating_key ||= Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-        provider_family: :openai,
-        instance_id: ssot_harness.instance_id(instance_config: gating_config)
-      )
+      @gating_key ||= ssot_harness.build_instance_key(instance_config: gating_config)
     end
 
     let(:publisher) { Legion::Extensions::Llm::Inventory::Publisher.new(provider_family: :openai) }
@@ -484,21 +565,17 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   describe 'instance-unavailable isolation' do
     def bring_up(config)
       publisher = Legion::Extensions::Llm::Inventory::Publisher.new(provider_family: :openai)
-      instance_id = ssot_harness.instance_id(instance_config: config)
-      key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-        provider_family: :openai, instance_id: instance_id
-      )
+      key = ssot_harness.build_instance_key(instance_config: config)
       callable = ssot_harness.build_callable(instance_config: config)
       coordinator = Legion::Extensions::Llm::Inventory::ProbeCoordinator.new(
         instance_key: key, enqueue: ->(**) { true }
       )
-
-      token = publisher.claim_instance(instance_id: instance_id, callable: callable, probe_request_handle: coordinator)
-      probe = publisher.readiness_probe_started(instance_id: instance_id, publisher_token: token)
-      drafts = ssot_harness.build_offering_drafts(instance_config: config, callable: callable, tier: :frontier)
-      publisher.activate_instance_snapshot(
-        instance_id: instance_id, publisher_token: token, offerings: drafts, sequence: 0, probe_token: probe
+      token = publisher.claim_instance(
+        instance_id: key.instance_id, physical_id: key.physical_id,
+        callable: callable, probe_request_handle: coordinator
       )
+      drafts = ssot_harness.build_offering_drafts(instance_config: config, callable: callable, tier: :frontier)
+      probe_and_activate(publisher: publisher, key: key, token: token, drafts: drafts)
 
       { publisher: publisher, key: key, callable: callable, token: token }
     end
