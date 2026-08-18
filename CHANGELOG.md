@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Synthetic-default skip warn fires once per boot** — the credential-less instance skip WARN (the unmodified synthetic `instances.default` template is the normal case) now fires exactly once per actor lifetime per instance name; an unconfigured provider is the normal state, so a per-tick WARN was permanent log noise. The first-occurrence operator signal is preserved.
+
 ## [0.6.2] - 2026-08-17
 
 ### Fixed

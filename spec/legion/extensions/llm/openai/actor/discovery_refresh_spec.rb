@@ -180,6 +180,22 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
       expect(registry.snapshot.publication_status(instance_key: key)).to be_nil
       expect(registry.snapshot.each_instance.to_a).to be_empty
     end
+
+    it 'warns exactly once per actor lifetime when a credential-less instance is skipped' do
+      warnings = []
+      fake_log = Object.new
+      fake_log.define_singleton_method(:warn) { |message = nil, **| warnings << message.to_s }
+      allow(actor).to receive(:log).and_return(fake_log)
+      allow(Legion::Extensions::Llm::Openai).to receive(:discover_instances)
+        .and_return({ default: { openai_api_base: 'https://api.openai.com' } })
+
+      actor.manual
+      actor.manual
+
+      expect(registry.snapshot.each_instance.to_a).to be_empty
+      expect(warnings.size).to eq(1), 'the credential-less skip must be loud but not per-tick spam'
+      expect(warnings.first).to include('default')
+    end
   end
 
   describe 'offerings refresh (D3 churn)' do

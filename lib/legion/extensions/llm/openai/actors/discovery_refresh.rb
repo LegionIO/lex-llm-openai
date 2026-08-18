@@ -149,12 +149,25 @@ module Legion
             def claimable_instance?(name:, instance_cfg:)
               return true if instance_credential?(instance_cfg)
 
-              log.warn("[openai] skipping instance #{name}: no API credential configured")
+              warn_unclaimable_instance(name: name)
               false
             end
 
             def instance_credential?(instance_cfg)
               valid_string?(instance_cfg[:openai_api_key] || instance_cfg[:api_key])
+            end
+
+            # Warns once per actor lifetime (per instance name) so the skip
+            # is loud without spamming every tick: skipped instances (the
+            # synthetic instances.default placeholder is the normal case)
+            # never enter @instance_states, so an unthrottled warn re-fired
+            # on every discovery tick.
+            def warn_unclaimable_instance(name:)
+              skip_warned = (@skip_warned ||= {})
+              return if skip_warned[name.to_s]
+
+              skip_warned[name.to_s] = true
+              log.warn("[openai] skipping instance #{name}: no API credential configured")
             end
 
             def build_instance_context(name:, instance_cfg:)
