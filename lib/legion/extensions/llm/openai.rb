@@ -12,7 +12,6 @@ module Legion
     module Llm
       # Openai provider extension namespace.
       module Openai
-        extend ::Legion::Extensions::Core if ::Legion::Extensions.const_defined?(:Core, false)
         extend ::Legion::Logging::Helper
         extend Legion::Extensions::Llm::AutoRegistration
 
