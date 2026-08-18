@@ -726,12 +726,13 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       expect(described_class.const_defined?(:DEFAULT_PROVIDER, false)).to be(false)
     end
 
-    it 'rejects instance_id "default" as reserved' do
-      expect do
-        Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
-          provider_family: :openai, instance_id: 'default'
-        )
-      end.to raise_error(Legion::Extensions::Llm::Inventory::Errors::ValidationError)
+    it 'accepts instance_id "default" as an ordinary operator label' do
+      key = Legion::Extensions::Llm::Inventory::Identity::InstanceKey.new(
+        provider_family: :openai, instance_id: 'default'
+      )
+
+      expect(key.provider_family).to eq(:openai)
+      expect(key.instance_id).to eq('default')
     end
 
     it 'rejects nil instance_id' do

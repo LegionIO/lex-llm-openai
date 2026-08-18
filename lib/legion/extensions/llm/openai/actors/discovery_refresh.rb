@@ -119,8 +119,7 @@ module Legion
 
             # Re-scans configured instances every tick so instances configured
             # after boot appear without a restart, and removed instances are
-            # released from the registry. Credential-less candidates (e.g. the
-            # synthetic instances.default placeholder) are skipped, not claimed.
+            # released from the registry.
             def reconcile_configured_instances
               discovered = Legion::Extensions::Llm::Openai.discover_instances
               claim_new_instances(discovered)
@@ -130,7 +129,6 @@ module Legion
             def claim_new_instances(discovered)
               discovered.each do |name, instance_cfg|
                 next if @instance_states.key?(name.to_s)
-                next unless claimable_instance?(name: name, instance_cfg: instance_cfg)
 
                 @instance_states[name.to_s] = build_instance_context(
                   name: name, instance_cfg: instance_cfg
@@ -144,30 +142,6 @@ module Legion
             def release_removed_instances(discovered)
               discovered_names = discovered.keys.map(&:to_s)
               (@instance_states.keys - discovered_names).each { |instance_id| remove_instance_state(instance_id) }
-            end
-
-            def claimable_instance?(name:, instance_cfg:)
-              return true if instance_credential?(instance_cfg)
-
-              warn_unclaimable_instance(name: name)
-              false
-            end
-
-            def instance_credential?(instance_cfg)
-              valid_string?(instance_cfg[:openai_api_key] || instance_cfg[:api_key])
-            end
-
-            # Warns once per actor lifetime (per instance name) so the skip
-            # is loud without spamming every tick: skipped instances (the
-            # synthetic instances.default placeholder is the normal case)
-            # never enter @instance_states, so an unthrottled warn re-fired
-            # on every discovery tick.
-            def warn_unclaimable_instance(name:)
-              skip_warned = (@skip_warned ||= {})
-              return if skip_warned[name.to_s]
-
-              skip_warned[name.to_s] = true
-              log.warn("[openai] skipping instance #{name}: no API credential configured")
             end
 
             def build_instance_context(name:, instance_cfg:)
