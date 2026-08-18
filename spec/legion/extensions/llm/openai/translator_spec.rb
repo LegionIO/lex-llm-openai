@@ -13,6 +13,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
     let(:canonical_request) do
       Legion::Extensions::Llm::Canonical::Request.build(
         id: 'test-req',
+        routing: { model: 'gpt-4o' },
         messages: [
           Legion::Extensions::Llm::Canonical::Message.build(
             role: :user,
@@ -73,6 +74,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
     context 'with tools' do
       let(:canonical_request) do
         Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(
               role: :user,
@@ -101,6 +103,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
     context 'with thinking config' do
       let(:canonical_request) do
         Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
           ],
@@ -119,6 +122,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
     context 'with streaming' do
       let(:canonical_request) do
         Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
           ],
@@ -135,6 +139,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
     context 'with system prompt' do
       let(:canonical_request) do
         Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
           system: 'Be helpful.',
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')

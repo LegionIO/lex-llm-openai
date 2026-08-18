@@ -16,17 +16,21 @@ end
 
 require 'legion/extensions/llm/openai/actors/fleet_worker'
 
-RSpec.describe Legion::Extensions::Llm::Openai::Actor::FleetWorker do # rubocop:disable RSpec/SpecFilePathFormat
+RSpec.describe Legion::Extensions::Llm::Openai::Actor::FleetWorker do
   subject(:actor) { described_class.new }
 
   it 'uses the logging helper for actor diagnostics' do
     expect(described_class.ancestors).to include(Legion::Logging::Helper)
   end
 
-  it 'uses the provider-owned fleet runner' do
+  it 'uses the provider-owned fleet runner via Legion::Runner.run' do
+    # Subscription dispatch resolves the String runner_class through
+    # Legion::Runner.run; use_runner? = false would send on the String.
     expect(actor.runner_class).to eq('Legion::Extensions::Llm::Openai::Runners::FleetWorker')
     expect(actor.runner_function).to eq('handle_fleet_request')
-    expect(actor.use_runner?).to be(false)
+    expect(actor.use_runner?).to be(true)
+    expect(actor.check_subtask?).to be(false)
+    expect(actor.generate_task?).to be(false)
   end
 
   it 'is enabled only when at least one provider instance responds to fleet requests' do

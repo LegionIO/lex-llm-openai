@@ -5,7 +5,6 @@ require 'spec_helper'
 RSpec.describe Legion::Extensions::Llm::Openai do
   let(:provider) { described_class::Provider.new(Legion::Extensions::Llm.config) }
   let(:chat_model) { Legion::Extensions::Llm::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
-  let(:registry_publisher) { instance_double(Legion::Extensions::Llm::RegistryPublisher) }
 
   before do
     Legion::Extensions::Llm.config.openai_api_key = 'test-key'
@@ -21,7 +20,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
     expect(settings[:enabled]).to be true
     expect(settings[:provider_family]).to eq(:openai)
-    expect(instance[:default_model]).to eq('gpt-5.5')
+    expect(instance).not_to have_key(:default_model)
     expect(instance.dig(:credentials, :api_key)).to eq('env://OPENAI_API_KEY')
     expect(instance.dig(:fleet, :capabilities)).to eq(%i[chat stream_chat embed image])
   end
@@ -80,19 +79,21 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(embed_model.modalities_output).to eq([:embeddings])
   end
 
-  it 'publishes discovered models asynchronously through the base registry publisher' do
-    stub_registry_publisher
+  it 'does not call publish_models_async (single SSOT v3 publication path via DiscoveryRefresh actor)' do
+    # §5: discover_offerings is a catalog query only. Publication is the
+    # exclusive responsibility of the DiscoveryRefresh actor via
+    # Inventory::Publisher — not a second RegistryPublisher call here. The
+    # override never references a registry publisher (the base class method
+    # is absent from the class, asserted below).
     stub_model_discovery
 
-    provider.discover_offerings(live: true)
+    offerings = provider.discover_offerings(live: true)
 
-    expect(registry_publisher).to have_received(:publish_models_async).at_least(:once)
+    expect(offerings).not_to be_empty
   end
 
-  it 'uses the base RegistryPublisher from lex-llm' do
-    publisher = described_class::Provider.registry_publisher
-    expect(publisher).to be_a(Legion::Extensions::Llm::RegistryPublisher)
-    expect(publisher.provider_family).to eq(:openai)
+  it 'does not ship a registry_publisher class method (SSOT v3: single publication path via DiscoveryRefresh)' do
+    expect(described_class::Provider).not_to respond_to(:registry_publisher)
   end
 
   it 'builds sanitized lex-llm registry events via the base RegistryEventBuilder' do
@@ -227,11 +228,6 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   def fake_response(body)
     Struct.new(:body).new(body)
-  end
-
-  def stub_registry_publisher
-    allow(described_class::Provider).to receive(:registry_publisher).and_return(registry_publisher)
-    allow(registry_publisher).to receive(:publish_models_async)
   end
 
   def stub_model_discovery

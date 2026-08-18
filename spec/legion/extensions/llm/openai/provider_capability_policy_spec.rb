@@ -110,14 +110,16 @@ RSpec.describe Legion::Extensions::Llm::Openai::Provider do # CapabilityPolicy i
       end
 
       before do
+        # Model-scoped config resolves through the shared SettingsCascade:
+        # extensions.llm.openai.models.<model>.<key> (provider leg), then the
+        # instance config's models.<model> entry. This provider is built from
+        # the global Llm.config (no to_h), so the provider leg carries the
+        # override here.
         allow(credential_sources).to receive(:setting)
           .with(:extensions, :llm, :openai)
-          .and_return({})
-        allow(Legion::Extensions::Llm.config).to receive(:respond_to?).and_call_original
-        allow(Legion::Extensions::Llm.config).to receive(:respond_to?).with(:models).and_return(true)
-        allow(Legion::Extensions::Llm.config).to receive(:models).and_return(
-          { 'gpt-4o-mini' => { capabilities: { vision: false, thinking: true } } }
-        )
+          .and_return(
+            { models: { 'gpt-4o-mini' => { capabilities: { vision: false, thinking: true } } } }
+          )
         allow(provider).to receive(:list_models).and_return([gpt4o_model])
       end
 

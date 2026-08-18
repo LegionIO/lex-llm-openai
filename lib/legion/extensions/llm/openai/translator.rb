@@ -16,8 +16,6 @@ module Legion
         #   - responses_api: true               (chat/completions wire format)
         #   - thinking_metadata_keys: [...]     (metadata keys for thinking)
         #   - stop_reason_map: { openai -> canonical }
-        # -- translator complexity is inherent to multi-field mapping (B1a pattern)
-        # rubocop:disable Metrics/AbcSize,Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity
         class Translator
           include Legion::Logging::Helper
 
@@ -75,33 +73,10 @@ module Legion
           def parse_response(wire)
             return Canonical::Response.from_hash(wire) if canonical_form?(wire)
 
-            body = wire.to_h
-            choice = Array(body['choices']).first || {}
-            message = choice['message'] || {}
-            usage_raw = body['usage'] || {}
-
-            text, thinking = extract_thinking_from_message(message)
-            tool_calls = parse_tool_calls(message['tool_calls'])
-            usage = parse_usage(usage_raw)
-            stop_reason = map_stop_reason(choice['finish_reason'])
-            metadata = extract_response_metadata(message)
-
-            Canonical::Response.build(
-              text: text,
-              thinking: thinking,
-              tool_calls: tool_calls,
-              usage: usage,
-              stop_reason: stop_reason,
-              model: body['model'],
-              metadata: metadata
-            )
+            build_canonical_response(wire.to_h)
           rescue StandardError => e
             handle_exception(e, level: :error, handled: true, operation: 'openai.translator.parse_response')
-            Canonical::Response.build(
-              text: '',
-              stop_reason: :error,
-              metadata: { error: e.message }
-            )
+            Canonical::Response.build(text: '', stop_reason: :error, metadata: { error: e.message })
           end
 
           # @param raw [Hash] single SSE data payload or canonical chunk
@@ -110,57 +85,32 @@ module Legion
             return nil if raw.nil? || raw.to_h.empty?
             return Canonical::Chunk.from_hash(raw) if canonical_chunk_form?(raw)
 
-            data = raw.to_h
-            choice = Array(data['choices']).first || {}
-            delta = choice['delta'] || {}
-            finish_reason = choice['finish_reason']
-            usage_raw = data['usage']
-
-            chunk_stop_reason = finish_reason ? map_stop_reason(finish_reason) : nil
-            chunk_usage = finish_reason && usage_raw ? parse_usage(usage_raw) : nil
-
-            return parse_error_chunk(data) if data['error']
-
-            reasoning = delta['reasoning_content'] || delta['reasoning']
-            content = delta['content']
-
-            if reasoning
-              return build_thinking_chunk(reasoning, data['id'], stop_reason: chunk_stop_reason,
-                                                                 usage: chunk_usage)
-            end
-            return build_text_chunk(content, data['id'], stop_reason: chunk_stop_reason, usage: chunk_usage) if content
-
-            tc_chunk = parse_tool_call_delta(delta, data, stop_reason: chunk_stop_reason, usage: chunk_usage)
-            return tc_chunk if tc_chunk
-
-            return build_done_chunk(data, finish_reason, usage_raw) if finish_reason
-
-            nil
+            parse_raw_chunk(raw.to_h)
           rescue StandardError => e
             handle_exception(e, level: :error, handled: true, operation: 'openai.translator.parse_chunk')
-            Canonical::Chunk.error_chunk(
-              error: e.message,
-              request_id: raw.to_h['id']
-            )
+            Canonical::Chunk.error_chunk(error: e.message, request_id: raw.to_h['id'])
           end
 
           private
 
-          # G18: OpenAI param mapping - unsupported drop with debug log
           def apply_params(wire, params)
+            apply_generation_params(wire, params)
+            wire[:frequency_penalty] = params.frequency_penalty if params.frequency_penalty
+            wire[:presence_penalty] = params.presence_penalty if params.presence_penalty
+            apply_format_params(wire, params)
+          end
+
+          def apply_generation_params(wire, params)
             wire[:max_tokens] = params.max_tokens if params.max_tokens
             wire[:temperature] = params.temperature if params.temperature
             wire[:top_p] = params.top_p if params.top_p
-
-            log.debug('[openai.translator] dropping unsupported param: top_k') if params.top_k
-
-            wire[:stop] = Array(params.stop_sequences) if params.stop_sequences
             wire[:seed] = params.seed if params.seed
-            wire[:frequency_penalty] = params.frequency_penalty if params.frequency_penalty
-            wire[:presence_penalty] = params.presence_penalty if params.presence_penalty
+            log.debug('[openai.translator] dropping unsupported param: top_k') if params.top_k
+          end
 
+          def apply_format_params(wire, params)
+            wire[:stop] = Array(params.stop_sequences) if params.stop_sequences
             wire[:response_format] = render_response_format(params.response_format) if params.response_format
-
             return unless params.max_thinking_tokens
 
             log.debug('[openai.translator] mapped to reasoning_effort via thinking config')
@@ -226,7 +176,10 @@ module Legion
             return canonical_request.routing[:model] if canonical_request.routing&.dig(:model)
             return canonical_request.caller[:model] if canonical_request.caller&.dig(:model)
 
-            canonical_request.metadata[:model] || 'gpt-4o'
+            model = canonical_request.metadata&.dig(:model)
+            return model if model
+
+            raise ArgumentError, '[openai] no model selected: routing, caller, and metadata all absent'
           end
 
           def render_messages(canonical_request)
@@ -244,41 +197,41 @@ module Legion
           def render_message(msg)
             openai_msg = { role: msg.role.to_s }
 
-            # rubocop:disable Lint/DuplicateBranch -- explicit per-role clarity for :tool vs unknown
             case msg.role
-            when :user
-              openai_msg[:content] = extract_text_from_content(msg.content)
             when :assistant
-              content_parts = []
-
-              openai_msg[:tool_calls] = render_openai_tool_calls(msg.tool_calls) if msg.tool_calls&.any?
-
-              text = extract_text_from_content(msg.content)
-              content_parts << { type: 'text', text: text } if text
-
-              if msg.content.is_a?(Array)
-                msg.content.each do |block|
-                  next unless block.is_a?(Canonical::ContentBlock) && block.tool_use?
-
-                  content_parts << {
-                    type: 'tool_use',
-                    id: block.id,
-                    name: block.name,
-                    input: block.input || {}
-                  }
-                end
-              end
-
-              openai_msg[:content] = content_parts.empty? ? '' : content_parts
+              render_assistant_message(openai_msg, msg)
             when :tool
               openai_msg[:tool_call_id] = msg.tool_call_id if msg.tool_call_id
               openai_msg[:content] = extract_text_from_content(msg.content)
             else
               openai_msg[:content] = extract_text_from_content(msg.content)
             end
-            # rubocop:enable Lint/DuplicateBranch
 
             openai_msg
+          end
+
+          def render_assistant_message(openai_msg, msg)
+            content_parts = []
+            openai_msg[:tool_calls] = render_openai_tool_calls(msg.tool_calls) if msg.tool_calls&.any?
+            text = extract_text_from_content(msg.content)
+            content_parts << { type: 'text', text: text } if text
+            append_tool_use_blocks(content_parts, msg.content)
+            openai_msg[:content] = content_parts.empty? ? '' : content_parts
+          end
+
+          def append_tool_use_blocks(content_parts, content)
+            return unless content.is_a?(Array)
+
+            content.each do |block|
+              next unless block.is_a?(Canonical::ContentBlock) && block.tool_use?
+
+              content_parts << {
+                type: 'tool_use',
+                id: block.id,
+                name: block.name,
+                input: block.input || {}
+              }
+            end
           end
 
           def extract_text_from_content(content)
@@ -310,7 +263,6 @@ module Legion
           end
 
           # Extracted from OpenAICompatible mixin response parsing
-
           def extract_thinking_from_message(message)
             metadata = {
               reasoning_content: message['reasoning_content'],
@@ -387,8 +339,7 @@ module Legion
           def map_stop_reason(raw)
             return nil unless raw
 
-            mapped = STOP_REASON_MAP.fetch(raw.to_s, nil)
-            mapped || raw.to_sym
+            STOP_REASON_MAP.fetch(raw.to_s, nil) || raw.to_sym
           end
 
           def extract_response_metadata(message)
@@ -463,8 +414,48 @@ module Legion
             h = hash.is_a?(Hash) ? hash.transform_keys(&:to_sym) : {}
             !h[:type].nil?
           end
+
+          def parse_raw_chunk(data)
+            return parse_error_chunk(data) if data['error']
+
+            choice = Array(data['choices']).first || {}
+            delta = choice['delta'] || {}
+            finish_reason = choice['finish_reason']
+            stop_reason = finish_reason ? map_stop_reason(finish_reason) : nil
+            usage = finish_reason && data['usage'] ? parse_usage(data['usage']) : nil
+
+            build_chunk_from_delta(data, delta, finish_reason, stop_reason, usage)
+          end
+
+          def build_chunk_from_delta(data, delta, finish_reason, stop_reason, usage)
+            reasoning = delta['reasoning_content'] || delta['reasoning']
+            return build_thinking_chunk(reasoning, data['id'], stop_reason: stop_reason, usage: usage) if reasoning
+
+            content = delta['content']
+            return build_text_chunk(content, data['id'], stop_reason: stop_reason, usage: usage) if content
+
+            tc_chunk = parse_tool_call_delta(delta, data, stop_reason: stop_reason, usage: usage)
+            return tc_chunk if tc_chunk
+
+            finish_reason ? build_done_chunk(data, finish_reason, data['usage']) : nil
+          end
+
+          def build_canonical_response(body)
+            choice = Array(body['choices']).first || {}
+            message = choice['message'] || {}
+            usage_raw = body['usage'] || {}
+            text, thinking = extract_thinking_from_message(message)
+            Canonical::Response.build(
+              text: text,
+              thinking: thinking,
+              tool_calls: parse_tool_calls(message['tool_calls']),
+              usage: parse_usage(usage_raw),
+              stop_reason: map_stop_reason(choice['finish_reason']),
+              model: body['model'],
+              metadata: extract_response_metadata(message)
+            )
+          end
         end
-        # rubocop:enable Metrics/AbcSize,Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity
       end
     end
   end

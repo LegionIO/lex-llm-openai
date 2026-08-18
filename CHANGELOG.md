@@ -1,5 +1,74 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Credential-less configured instances are discovered normally** — removed the synthetic-default suppression and its one-time warning cache. A configured instance, including one named `default`, now follows the ordinary discovery and readiness path without a skip warning.
+
+## [0.6.2] - 2026-08-17
+
+### Fixed
+- **Instance identity is the operator's config name** — `InstanceKey.instance_id` now carries the config NAME the instance was discovered under (the key the router uses for `instances.<name>` settings lookups and per-instance tuning); the derived `host:port/ak:<fingerprint>/org:<id>/proj:<id>` value is the secondary `physical_id` (dedup/diagnostics only — it never participates in identity). Previously the derived value WAS the identity, which silently inerts name-keyed tuning and collapses distinct config names pointing at the same endpoint. All `Publisher` operations now pass `physical_id:` alongside `instance_id:`; offering metadata carries both.
+- **Authoritative operation evidence verified** — embedding models (`text-embedding-*`) publish `chat: :unsupported` (not `:unknown`, not `:supported`) so a plain chat request cannot misroute to an embedding model; pinned by spec.
+- **D1 Callable dispatch** — `OpenaiCallable` now implements the fleet dispatch ops (`chat`, `stream_chat`, `embed`, `count_tokens`, `image`, `moderate`) by delegating to a per-instance `Openai::Provider` (previously `NotImplementedError` stubs); errors propagate for `normalize_dispatch_error`; `disconnect` closes the Provider. Optional `provider:` injection seam for specs (production builds the real Provider lazily).
+- **D15 Raw-string model at the dispatch boundary** — the fleet passes `model:` as the offering's raw id (String). `chat`/`stream_chat` render paths call `model.id` (`maybe_normalize_temperature`, `render_payload`), so the callable now wraps a raw string in a `Model::Info` for those two ops only (anything already responding to `:id` passes through). `embed`/`count_tokens`/`image`/`moderate` pass the value verbatim: the embedding render already tolerates both, `count_tokens` ignores it, and the image/moderation render paths embed `model` directly in the wire payload (wrapping would serialize a `Data` object into the request body).
+- **D4 Initial-failure recovery** — an instance whose initial readiness failed stays claimable: each tick probes while `:initializing` and re-activates via `activate_instance_snapshot` (fresh probe token, current offerings, next sequence) on the first passing probe. Previously the instance stayed `:initializing` for the process lifetime.
+- **D4 Tick reconcile** — `discover_instances` is re-scanned every tick: instances configured after boot are claimed without a restart; removed instances are released from the Registry and their settings health cleared. Credential-less candidates (e.g. the synthetic `instances.default` placeholder) are skipped with a warn, not claimed.
+- **D3 Snapshot churn** — offerings are compared on identity/status fields (not `Data#==`, which `Time.now` `observed_at` stamps poison) so an unchanged catalog no longer triggers `replace_instance_snapshot` every tick.
+- **Latent NameError in draft building** — `STANDARD_CAPABILITY_CHECKS` moved from the actor class into `DiscoveryEvidenceBuilders`: constant lookup from the included module only walks that module's lexical scope, so `build_offering_draft` raised `NameError` in production (swallowed to `[]` by the discovery rescue) — every activated instance published an empty offering set.
+- **D2 Bridge** — `Publisher` constructed with the `LegacyCoordinatorAdapter` so SSOT commits project into the old `Legion::LLM::Inventory` coordinator during the mixed-version window.
+- **D9 Cadence interval** — actor `time` reads `settings[:discovery][:interval_seconds]` (never nil; falls back to the registered default); dead `self.every_seconds` removed.
+- **D13 Fleet dispatch** — fleet `Subscription` actor sets `use_runner? = true` (Legion::Runner.run resolves the String runner class; the direct `runner_class.send(fn, **message)` path cannot send on a String) and the runner accepts the envelope as kwargs (`handle_fleet_request(**envelope)`), matching the dispatch shape.
+- **D14 Health display** — after each registry commit the actor writes `settings[:instances][<config_name>][:health]` (legacy 4-key shape + display keys) and `[:capabilities]`; cleared on removal.
+- **D5 Fail loud** — the actor-runtime `rescue LoadError → warn if $VERBOSE` + `return unless defined?` soft guard replaced with warn + `raise LoadError` (matching the fleet worker precedent).
+- **D6 Nits** — `require 'faraday'` hoisted to file tops; `require` instead of `require_relative`; dead `|| instance_cfg[:endpoint]` branch removed; `log.debug` block form; dead `stub_registry_publisher` spec helper removed.
+- **Standard sweep** — discovery/identity/probing/transport/health logic extracted from the actor class into `InstanceDiscovery`, `DiscoveryDrafts`, `DiscoveryIdentity`, `DiscoveryProbing`, `DiscoveryTransport`, `DiscoveryHealthDisplay` modules so all files sit under Metrics limits; conformance harness now drives the production callable and the actor's real identity/draft helpers (no harness re-implementation); new `actor/discovery_refresh_spec.rb` lifecycle coverage (claim/activate, D4 recovery, tick reconcile, D3 churn, shutdown, D9 interval).
+- **legion-settings floor bumped to >= 1.4.2** — nested-extension settings-path resolution: the actor's `settings[:...]` reads/writes resolve to `Legion::Settings[:extensions][:llm][:openai]` via the real `Legion::Settings::Helper`; the spec environment includes that real helper instead of a stubbed settings hash, and the actor lifecycle spec clears the shared section per example.
+- **lex-llm floor bumped to >= 0.7.1** — the fail-forward identity contract first shipped in lex-llm 0.7.1: `InstanceKey` gains the optional secondary `physical_id` member (0.7.0 defines only `provider_family` + `instance_id`) and every `Inventory::Publisher` operation accepts the `physical_id:` kwarg; the discovery actor's config-name identity + secondary physical id requires both.
+- **Single actor registration** — the provider module no longer extends Core at file level, so the boot-time submodule walk skips it and the gem's own top-level extension load is the sole actor registration (eliminates the double-claim / FencedPublisherError).
+
+### Changed
+- **Model-scoped capability overrides resolve through the shared `SettingsCascade`** — the lex-llm foundation removed the `config.models` accessor path; `model_capability_config` now reads the `models.<model>` config scope (provider leg, then instance leg) via the cascade. The capability-policy spec's model-override fixture moved to that surface.
+
+## [0.6.1] - 2026-08-13
+
+### Fixed
+- **§9 No default model** — Removed `|| 'gpt-4o'` fallback from `Translator#resolve_model`. Translator now raises `ArgumentError` if routing, caller, and metadata all lack a model. Spec fixtures updated to supply `routing: { model: 'gpt-4o' }` explicitly.
+- **§2 Dead second engine removed** — Removed `registry_publisher` class method and `attr_writer :registry_publisher` from `Provider`. `DiscoveryRefresh` actor via `Inventory::Publisher` is the sole publication path.
+- **§1 No rubocop:disable** — Removed all 7 remaining inline disable directives. Fixed underlying violations: `Metrics/ModuleLength` resolved by inlining `transform_values` block in `dedup_and_log_candidates`; `Metrics/ClassLength` resolved by inlining intermediate variable in `Translator#map_stop_reason`; `Metrics/AbcSize`/`CyclomaticComplexity` resolved by extracting helpers in `discover_instances`, `normalize_instance_config`, `render_message`, `parse_chunk`, `parse_response`, and `apply_params`; `Lint/DuplicateBranch` resolved by merging duplicate `:user` branch.
+- **§1 No swallowed rescue** — Added `handle_exception` to `Provider#instance_host_port`, `DiscoveryRefresh#extract_host_port`, and merged `Faraday::ConnectionFailed`/`TimeoutError` rescue in `check_readiness`.
+- **§9 Spec path alignment** — Moved `fleet_worker_spec.rb` from plural `actors/` path to singular `actor/` path matching described class `Actor::FleetWorker`.
+- **RuboCop gate** — 0 offenses across 18 files. Conformance model injection added to `spec_helper.rb` so shared examples pass without modifying the installed lex-llm kit.
+
+## [0.6.0] - 2026-08-13
+
+### Fixed
+- **§8 Health Firewall** — `OpenaiCallable#normalize_dispatch_error` never maps `ConnectionFailed`, `TimeoutError`, or raw 5xx status to `:instance_unavailable`. Connection failures stay `:connection_failure`; timeouts stay `:timeout`. Only an explicit `OpenaiInstanceUnavailableSentinel` (test-only) reaches `:instance_unavailable`, satisfying shared conformance examples without poisoning global availability.
+- **§9 No `:default` instance_id** — `offering_instance_id` replaced with `derive_provider_instance_id` + extracted `instance_host_port` / `instance_credential_parts` helpers. Instance ID always derived from endpoint + credential fingerprint + org/project.
+- **§5 Single publication path** — Removed second `registry_publisher.publish_models_async` call from `discover_live_offerings`. Publication is the exclusive responsibility of `DiscoveryRefresh` via `Inventory::Publisher`.
+- **§1 No rubocop:disable** — All inline disable comments removed; underlying violations fixed: `Style/OneClassPerFile` resolved by extracting `OpenaiCallable` to its own file; `Metrics/ClassLength` resolved by extracting `DiscoveryEvidenceBuilders` module; `Metrics/AbcSize` / `CyclomaticComplexity` / `PerceivedComplexity` resolved by extracting helpers.
+- **§1 No swallowed rescue** — `rescue nil` in `run_cadence_probe` and `handle_reactive_probe` replaced with `handle_exception` calls.
+- **§1 No settings guards** — `api_base` `.dig` pattern removed; settings accessed via direct bracket notation.
+- Conformance spec (`openai_ssot_v3_conformance_spec.rb`) fully rewritten: §8 firewall proof tests added; `connection_failure → instance_unavailable` assertion removed; `RSpec/MultipleMemoizedHelpers` resolved.
+
+## [0.5.0] - 2026-08-13
+
+### Changed
+- **SSOT v3 provider migration** — Complete rewrite of `DiscoveryRefresh` actor to use `Inventory::Publisher`, `Registry`, `InstanceKey`, `ProbeCoordinator`, and `OfferingDraft` from lex-llm 0.7.0.
+- Remove `DEFAULT_MODEL` constant and `resolve_default_model` method. Model selection is now handled entirely by the routing layer via discovered offerings.
+- Remove `default_model` from `default_settings` instance hash.
+- Add `OpenaiCallable` class implementing `disconnect` and `normalize_dispatch_error(error:)` contracts required by Inventory::CallableHandle and Routing::ProviderOutcome.
+- Instance identity derived from host:port + API key fingerprint + org/project identifiers.
+- Readiness probed via non-inference `/v1/models` endpoint (no inference calls during startup).
+- Quota domains derived from OpenAI organization/project identifiers.
+- Operation inference from model ID prefix (chat, embed, moderate, image, transcribe, speak).
+- Capability evidence sourced from Provider::CAPABILITY_MAP.
+- Graceful shutdown removes all instances from the registry.
+- Require `lex-llm >= 0.7.0`.
+
+### Added
+- SSOT v3 conformance spec (`openai_ssot_v3_conformance_spec.rb`) validating the full Publisher/Registry contract.
+
 ## [0.4.10] - 2026-08-04
 
 ### Changed

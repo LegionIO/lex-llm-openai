@@ -37,7 +37,18 @@ module Legion
               'handle_fleet_request'
             end
 
+            # Subscription dispatch resolves the String runner_class through
+            # Legion::Runner.run (use_runner? = true); the direct
+            # runner_class.send(fn, **message) path cannot send on a String.
             def use_runner?
+              true
+            end
+
+            def check_subtask?
+              false
+            end
+
+            def generate_task?
               false
             end
 
