@@ -26,6 +26,19 @@ class RecordingOpenaiProvider
     @call_count = 0
   end
 
+  # Faithful to the production base Provider contract (lex-llm 0.7.7): the
+  # dispatch boundary accepts Canonical::Message only and rejects anything
+  # else loudly.
+  def enforce_canonical_messages!(messages)
+    Array(messages).each do |message|
+      next if message.is_a?(Legion::Extensions::Llm::Canonical::Message)
+
+      raise ArgumentError,
+            "provider input must be Canonical::Message objects, got #{message.class} — " \
+            'non-canonical message shapes must not cross the dispatch boundary'
+    end
+  end
+
   def chat(**kwargs)
     @call_count += 1
     { role: 'assistant', content: 'test response', model: kwargs[:model] }
@@ -55,6 +68,19 @@ class ModelCapturingOpenaiProvider
 
   def initialize
     @received_models = {}
+  end
+
+  # Faithful to the production base Provider contract (lex-llm 0.7.7): the
+  # dispatch boundary accepts Canonical::Message only and rejects anything
+  # else loudly.
+  def enforce_canonical_messages!(messages)
+    Array(messages).each do |message|
+      next if message.is_a?(Legion::Extensions::Llm::Canonical::Message)
+
+      raise ArgumentError,
+            "provider input must be Canonical::Message objects, got #{message.class} — " \
+            'non-canonical message shapes must not cross the dispatch boundary'
+    end
   end
 
   def chat(model:, **)
@@ -802,7 +828,8 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       end
 
       it 'wraps a raw string model into a Model::Info for chat' do
-        capturing_callable.chat(messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o')
+        messages = [Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'hi')]
+        capturing_callable.chat(messages: messages, model: 'gpt-4o')
 
         model = capturing.received_models[:chat]
         expect(model).to be_a(Legion::Extensions::Llm::Model::Info)

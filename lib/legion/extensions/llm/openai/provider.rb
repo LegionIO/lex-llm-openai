@@ -267,6 +267,28 @@ module Legion
 
           private
 
+          # Canonical boundary (N x N law): pipeline dispatch delivers
+          # Canonical::Message objects; the provider-native Chat facade
+          # delivers lex-llm Message. Both are object shapes the inherited
+          # OpenAI wire render consumes directly. Plain Hashes are the
+          # bypass class (the 2026-08-19 incident) — reject loudly, never
+          # fail opaquely downstream.
+          def render_payload(messages, tools:, temperature:, model:, stream:, schema:, thinking:, tool_prefs:) # rubocop:disable Metrics/ParameterLists
+            enforce_render_messages!(messages)
+            super
+          end
+
+          def enforce_render_messages!(messages)
+            Array(messages).each do |msg|
+              next if msg.is_a?(Canonical::Message)
+              next if msg.is_a?(Legion::Extensions::Llm::Message)
+
+              raise ArgumentError,
+                    "openai provider input must be Canonical::Message objects, got #{msg.class} — " \
+                    'non-canonical message shapes must not cross the dispatch boundary'
+            end
+          end
+
           def build_model_infos(body)
             body.fetch('data', []).map do |raw_model|
               id = raw_model.fetch('id')

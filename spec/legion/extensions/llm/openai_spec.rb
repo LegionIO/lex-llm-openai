@@ -74,6 +74,39 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     )
   end
 
+  # ─── Dispatch boundary regression guards (N x N law, 2026-08-19 incident) ──
+  # SSOT v3 local dispatch passed executor Hash messages straight to the
+  # provider callable, bypassing the canonical contract; the resulting opaque
+  # failure was misclassified as a provider error (25/25 failed openai
+  # dispatches). The boundary now rejects plain-Hash input loudly at both the
+  # fleet callable and the provider render seam.
+  describe 'dispatch boundary (canonical input only)' do
+    let(:hash_messages) { [{ role: 'user', content: 'What is the capital of France?' }] }
+
+    it 'rejects plain Hash messages at the fleet callable boundary' do
+      callable, = callable_wire_capture
+
+      expect { callable.chat(messages: hash_messages, model: 'gpt-5.2') }
+        .to raise_error(ArgumentError, /Canonical::Message/)
+    end
+
+    it 'rejects plain Hash messages at the provider render seam' do
+      expect do
+        provider.send(:render_payload, hash_messages, **render_kwargs)
+      end.to raise_error(ArgumentError, /Canonical::Message/)
+    end
+
+    it 'accepts provider-native lex-llm Message at the render seam (Chat facade shape)' do
+      payload = provider.send(
+        :render_payload,
+        [Legion::Extensions::Llm::Message.new(role: :user, content: 'brief')],
+        **render_kwargs
+      )
+
+      expect(payload[:messages]).to eq([{ role: 'user', content: 'brief' }])
+    end
+  end
+
   it 'advertises OpenAI model family capabilities' do
     expect(openai_capability_checks).to eq([true, true, true, true, true, false])
   end
@@ -206,6 +239,11 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     provider.send(:render_payload, [Legion::Extensions::Llm::Message.new(role: :user, content: 'brief')],
                   tools: {}, temperature: 0.2, model: chat_model, stream: true, schema: nil,
                   thinking: { effort: 'medium' }, tool_prefs: nil)
+  end
+
+  def render_kwargs
+    { tools: {}, temperature: nil, model: chat_model, stream: false, schema: nil,
+      thinking: nil, tool_prefs: nil }
   end
 
   def expected_chat_payload

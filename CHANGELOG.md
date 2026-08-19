@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.5] - 2026-08-19
+
+### Changed
+- **Canonical dispatch boundary enforced** — `OpenaiCallable#chat`, `#stream_chat`, and `#count_tokens` now call `Provider#enforce_canonical_messages!` before delegating, and the provider's render seam accepts only `Canonical::Message` (pipeline dispatch) or provider-native `Legion::Extensions::Llm::Message` (Chat facade); anything else raises a loud `ArgumentError` at the boundary instead of failing opaquely downstream and being misclassified as a provider error. The 2026-08-19 incident: SSOT v3 local dispatch passed executor Hash messages straight to the provider callable, bypassing the canonical contract (25/25 failed openai dispatches). N x N law: client translator = client <-> Canonical, executor = Canonical throughout, provider translator = Canonical <-> provider wire — anything half-translated between Canonical and a legacy shape is the defect class this boundary kills.
+- **lex-llm floor bumped to >= 0.7.7** — for `Provider#enforce_canonical_messages!` and the canonical-only `count_tokens`.
+- **Local-tree lex-llm path dependency added to the test group** so the adjacent checkout resolves against unreleased 0.7.7 during development.
+
+### Added
+- Dispatch-boundary regression guards: plain-Hash input raises `ArgumentError` at both the fleet callable and the provider render seam; provider-native `Message` input renders to the unchanged OpenAI wire. Client request formats and the provider wire format are unchanged.
+
 ## [0.6.4] - 2026-08-19
 
 ### Fixed
