@@ -9,6 +9,7 @@
 - **Malformed discovery failures fail loud** — programming/configuration errors from draft construction are no longer swallowed as an empty catalog; only Faraday transport failures and JSON parse failures take the existing empty-discovery recovery path.
 - **lex-llm floor bumped to >= 0.7.6** — requires the shared `WeightSchema`, atomic `WeightReconciler`, weighted offering records, and operation-to-lane taxonomy used by this writer. The `legion-settings >= 1.4.2` floor and lifecycle remain unchanged.
 - **Credential-less configured instances are discovered normally** — removed the synthetic-default suppression and its one-time warning cache. A configured instance, including one named `default`, now follows the ordinary discovery and readiness path without a skip warning.
+- **Complete offering equivalence** — ordinary discovery now compares the complete `OfferingDraft` contract as an order-insensitive, duplicate-sensitive multiset, ignoring only evidence `observed_at` timestamps. Provider-native identity, publication source, tokenizer evidence, and all future draft fields trigger exactly one replacement when they change, while catalog reordering remains a no-op.
 
 ## [0.6.2] - 2026-08-17
 

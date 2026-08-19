@@ -103,6 +103,31 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
     )
   end
 
+  def expect_single_authoritative_republication(&)
+    publisher = start_republication_cadence
+    mutate_next_gpt_draft(&)
+
+    actor.manual
+
+    expect(publisher).to have_received(:replace_instance_snapshot).once
+    expect(alpha_state[:sequence]).to eq(2)
+  end
+
+  def start_republication_cadence
+    stub_models
+    actor.manual
+    actor.send(:publisher).tap do |publisher|
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+    end
+  end
+
+  def mutate_next_gpt_draft(&)
+    allow(actor).to receive(:build_offering_draft).and_wrap_original do |original, **kwargs|
+      draft = original.call(**kwargs)
+      kwargs[:model_id] == 'gpt-4o' ? yield(draft) : draft
+    end
+  end
+
   describe 'initial claim and activation' do
     it 'claims, probes, and activates configured instances on the first tick' do
       stub_models
@@ -242,6 +267,61 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
       actor.manual
       expect(publisher).to have_received(:replace_instance_snapshot).once
       expect(registry.snapshot.offerings_for(instance_key: key_for(alpha_cfg)).map(&:model)).to eq(['gpt-4o'])
+    end
+
+    it 'replaces once when only the provider-native key changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(provider_native_key: "#{draft.provider_native_key}-deployment")
+      end
+    end
+
+    it 'replaces once when only the tokenizer evidence value changes' do
+      expect_single_authoritative_republication do |draft|
+        tokenizer = Legion::Extensions::Llm::Inventory::ValueEvidence.new(
+          status: :known,
+          value: { estimator: 'tiktoken', version: '1', parameters: {} },
+          source: :provider_catalog
+        )
+        draft.with(tokenizer_evidence: tokenizer)
+      end
+    end
+
+    it 'replaces once when only the tokenizer evidence source changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(tokenizer_evidence: draft.tokenizer_evidence.with(source: :guessed))
+      end
+    end
+
+    it 'replaces once when only the publication source changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(publication_source: :provider_static_catalog)
+      end
+    end
+
+    it 'does not replace when an equivalent catalog arrives in reverse order' do
+      stub_models
+      actor.manual
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      stub_models('{"data": [{"id": "text-embedding-3-small"}, {"id": "gpt-4o"}]}')
+
+      actor.manual
+
+      expect(publisher).not_to have_received(:replace_instance_snapshot)
+      expect(alpha_state[:sequence]).to eq(1)
+    end
+
+    it 'treats a same-size change in duplicate multiplicity as significant' do
+      chat = draft_for('gpt-4o')
+      embedding = draft_for('text-embedding-3-small')
+
+      changed = actor.send(
+        :offerings_changed?,
+        previous: [chat, chat, embedding],
+        current: [chat, embedding, embedding]
+      )
+
+      expect(changed).to be(true)
     end
   end
 
