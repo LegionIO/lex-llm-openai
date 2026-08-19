@@ -79,6 +79,8 @@ module Legion
           def basic_fields_stable?(candidate, draft)
             candidate.model == draft.model &&
               candidate.tier == draft.tier &&
+              candidate.weight_inputs == draft.weight_inputs &&
+              candidate.base_weight == draft.base_weight &&
               evidence_keys_stable?(candidate.operation_evidence, draft.operation_evidence) &&
               evidence_keys_stable?(candidate.capability_evidence, draft.capability_evidence)
           end

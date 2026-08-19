@@ -61,6 +61,19 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(chat_payload).to include(expected_chat_payload)
   end
 
+  it 'carries the folded system message through the actual callable into the rendered wire payload' do
+    callable, capture = callable_wire_capture
+
+    callable.chat(messages: folded_messages, model: 'gpt-5.2')
+
+    expect(capture.fetch(:payload)[:messages]).to eq(
+      [
+        { role: 'system', content: 'Follow the exact system law.' },
+        { role: 'user', content: 'hello' }
+      ]
+    )
+  end
+
   it 'advertises OpenAI model family capabilities' do
     expect(openai_capability_checks).to eq([true, true, true, true, true, false])
   end
@@ -228,6 +241,37 @@ RSpec.describe Legion::Extensions::Llm::Openai do
 
   def fake_response(body)
     Struct.new(:body).new(body)
+  end
+
+  def callable_wire_capture
+    capture = {}
+    connection = instance_double(Legion::Extensions::Llm::Connection)
+    provider.instance_variable_set(:@connection, connection)
+    allow(connection).to receive(:post) do |_url, payload, &_block|
+      capture[:payload] = payload
+      fake_response(completion_body)
+    end
+    callable = described_class::OpenaiCallable.new(
+      instance_cfg: {}, logger: instance_double(Logger).as_null_object, provider: provider
+    )
+    [callable, capture]
+  end
+
+  def folded_messages
+    [
+      Legion::Extensions::Llm::Canonical::Message.build(
+        role: :system, content: 'Follow the exact system law.'
+      ),
+      Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'hello')
+    ]
+  end
+
+  def completion_body
+    {
+      'choices' => [{ 'message' => { 'role' => 'assistant', 'content' => 'done' } }],
+      'usage' => { 'prompt_tokens' => 5, 'completion_tokens' => 1 },
+      'model' => 'gpt-5.2'
+    }
   end
 
   def stub_model_discovery

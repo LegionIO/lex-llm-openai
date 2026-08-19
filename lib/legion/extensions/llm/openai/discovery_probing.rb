@@ -68,7 +68,7 @@ module Legion
           end
 
           def handle_reactive_probe(instance_id:, request:)
-            state = @instance_states[instance_id]
+            state = tracked_instance_state(instance_id)
             return unless state
 
             coordinator = state[:probe_coordinator]
@@ -93,29 +93,6 @@ module Legion
             end
             handle_exception(e, level: :warn, operation: 'openai.actor.reactive_probe',
                                 instance_id: instance_id)
-          end
-
-          def report_probe_result(instance_id:, probe_token:, readiness:, state:)
-            if readiness.ready?
-              publisher.readiness_succeeded(
-                instance_id: instance_id, physical_id: state[:physical_id], probe_token: probe_token
-              )
-              state[:last_probe_outcome] = :success
-              write_instance_health(
-                config_name: state[:name], available: true, reason: 'readiness probe succeeded',
-                probe_outcome: :success, source: :readiness_probe
-              )
-            else
-              publisher.readiness_failed(
-                instance_id: instance_id, physical_id: state[:physical_id],
-                probe_token: probe_token, reason: readiness.reason
-              )
-              state[:last_probe_outcome] = :failure
-              write_instance_health(
-                config_name: state[:name], available: false, reason: readiness.reason,
-                probe_outcome: :failure, source: :readiness_probe
-              )
-            end
           end
 
           def build_probe_enqueue(instance_id:)
