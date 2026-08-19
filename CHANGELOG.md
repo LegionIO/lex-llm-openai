@@ -1,9 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.4] - 2026-08-19
 
 ### Fixed
+- **Write-time lane weights** — every discovered offering now carries the validated four-axis `weight_inputs` and `base_weight` pair from live settings. The existing periodic actor cadence atomically compares, publishes, sequences, and caches catalog or weight-only changes; unchanged passes stay no-op, initializing instances cache without replacing, and removals cannot race into late activation.
+- **Dormant weight visibility** — ordinary discovery passes emit one info log when a configured provider, instance, model, or offering weight has no published lane; the state clears when the lane appears and logs once again if it later disappears.
+- **D14 callable wire conformance** — an actual `OpenaiCallable#chat` request with a folded leading system message is captured at the provider connection and verified as OpenAI's native leading `role: system` message.
+- **Malformed discovery failures fail loud** — programming/configuration errors from draft construction are no longer swallowed as an empty catalog; only Faraday transport failures and JSON parse failures take the existing empty-discovery recovery path.
+- **lex-llm floor bumped to >= 0.7.6** — requires the shared `WeightSchema`, atomic `WeightReconciler`, weighted offering records, and operation-to-lane taxonomy used by this writer. The `legion-settings >= 1.4.2` floor and lifecycle remain unchanged.
 - **Credential-less configured instances are discovered normally** — removed the synthetic-default suppression and its one-time warning cache. A configured instance, including one named `default`, now follows the ordinary discovery and readiness path without a skip warning.
+- **Complete offering equivalence** — ordinary discovery now compares the complete `OfferingDraft` contract as an order-insensitive, duplicate-sensitive multiset, ignoring only evidence `observed_at` timestamps. Provider-native identity, publication source, tokenizer evidence, and all future draft fields trigger exactly one replacement when they change, while catalog reordering remains a no-op.
 
 ## [0.6.2] - 2026-08-17
 

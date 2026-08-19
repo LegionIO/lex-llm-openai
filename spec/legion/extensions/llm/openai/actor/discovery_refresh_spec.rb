@@ -5,7 +5,6 @@ require 'spec_helper'
 require 'faraday'
 
 RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
-  let(:registry) { Legion::Extensions::Llm::Inventory::Registry }
   let(:actor) { described_class.new }
 
   let(:alpha_cfg) do
@@ -35,6 +34,10 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
     allow(Legion::Extensions::Llm::Openai).to receive(:discover_instances).and_return({ alpha: alpha_cfg })
   end
 
+  after { registry.reset! }
+
+  def registry = Legion::Extensions::Llm::Inventory::Registry
+
   def stub_models(body = catalog)
     allow(actor).to receive(:build_api_connection).and_return(
       instance_double(Faraday::Connection, get: Faraday::Response.new(status: 200, body: body))
@@ -55,6 +58,74 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
       instance_id: name.to_s,
       physical_id: actor.send(:derive_physical_id, instance_cfg: cfg)
     )
+  end
+
+  def full_weight_settings(provider: 100, instance: 100, model: 100, tier: 100)
+    {
+      extensions: {
+        llm: {
+          openai: {
+            weight: provider,
+            instances: {
+              alpha: {
+                weight: instance,
+                models: { 'gpt-4o' => { weight: model } }
+              }
+            }
+          }
+        }
+      },
+      llm: { routing: { tier_weights: { frontier: tier } } }
+    }
+  end
+
+  def stub_live_settings(live_settings)
+    allow(Legion::Settings).to receive(:dig) { |*path| live_settings.dig(*path) }
+  end
+
+  def alpha_state
+    actor.instance_variable_get(:@instance_states).fetch('alpha')
+  end
+
+  def readiness(ready:)
+    Legion::Extensions::Llm::Inventory::ReadinessResult.new(
+      ready: ready, reason: ready ? 'ready' : 'not ready', metadata: {}
+    )
+  end
+
+  def draft_for(model_id)
+    actor.send(
+      :build_offering_draft,
+      model_id: model_id,
+      model_data: { id: model_id },
+      instance_cfg: alpha_cfg,
+      instance_key: key_for(alpha_cfg)
+    )
+  end
+
+  def expect_single_authoritative_republication(&)
+    publisher = start_republication_cadence
+    mutate_next_gpt_draft(&)
+
+    actor.manual
+
+    expect(publisher).to have_received(:replace_instance_snapshot).once
+    expect(alpha_state[:sequence]).to eq(2)
+  end
+
+  def start_republication_cadence
+    stub_models
+    actor.manual
+    actor.send(:publisher).tap do |publisher|
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+    end
+  end
+
+  def mutate_next_gpt_draft(&)
+    allow(actor).to receive(:build_offering_draft).and_wrap_original do |original, **kwargs|
+      draft = original.call(**kwargs)
+      kwargs[:model_id] == 'gpt-4o' ? yield(draft) : draft
+    end
   end
 
   describe 'initial claim and activation' do
@@ -196,6 +267,304 @@ RSpec.describe Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh do
       actor.manual
       expect(publisher).to have_received(:replace_instance_snapshot).once
       expect(registry.snapshot.offerings_for(instance_key: key_for(alpha_cfg)).map(&:model)).to eq(['gpt-4o'])
+    end
+
+    it 'replaces once when only the provider-native key changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(provider_native_key: "#{draft.provider_native_key}-deployment")
+      end
+    end
+
+    it 'replaces once when only the tokenizer evidence value changes' do
+      expect_single_authoritative_republication do |draft|
+        tokenizer = Legion::Extensions::Llm::Inventory::ValueEvidence.new(
+          status: :known,
+          value: { estimator: 'tiktoken', version: '1', parameters: {} },
+          source: :provider_catalog
+        )
+        draft.with(tokenizer_evidence: tokenizer)
+      end
+    end
+
+    it 'replaces once when only the tokenizer evidence source changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(tokenizer_evidence: draft.tokenizer_evidence.with(source: :guessed))
+      end
+    end
+
+    it 'replaces once when only the publication source changes' do
+      expect_single_authoritative_republication do |draft|
+        draft.with(publication_source: :provider_static_catalog)
+      end
+    end
+
+    it 'does not replace when an equivalent catalog arrives in reverse order' do
+      stub_models
+      actor.manual
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      stub_models('{"data": [{"id": "text-embedding-3-small"}, {"id": "gpt-4o"}]}')
+
+      actor.manual
+
+      expect(publisher).not_to have_received(:replace_instance_snapshot)
+      expect(alpha_state[:sequence]).to eq(1)
+    end
+
+    it 'treats a same-size change in duplicate multiplicity as significant' do
+      chat = draft_for('gpt-4o')
+      embedding = draft_for('text-embedding-3-small')
+
+      changed = actor.send(
+        :offerings_changed?,
+        previous: [chat, chat, embedding],
+        current: [chat, embedding, embedding]
+      )
+
+      expect(changed).to be(true)
+    end
+  end
+
+  describe 'write-time weight publication on the ordinary actor cadence' do
+    let(:live_settings) { full_weight_settings(provider: 110, instance: 115, model: 120, tier: 150) }
+
+    before do
+      stub_live_settings(live_settings)
+      stub_models
+    end
+
+    it 'stores the exact four-axis pair and product on drafts built by the production writer' do
+      draft = draft_for('gpt-4o')
+
+      expect(draft.weight_inputs).to eq(
+        tier: 150, provider: 110, instance: 115, model_or_offering: 120
+      )
+      expect(draft.base_weight).to eq(227_700_000)
+    end
+
+    it 'publishes one replacement for a weight-only change on the next ordinary pass' do
+      live_settings[:extensions][:llm][:openai][:weight] = 100
+      actor.manual
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      live_settings[:extensions][:llm][:openai][:weight] = 110
+
+      actor.manual
+
+      status = registry.snapshot.publication_status(instance_key: key_for(alpha_cfg))
+      offering = registry.snapshot.offerings_for(instance_key: key_for(alpha_cfg)).find do |item|
+        item.model == 'gpt-4o'
+      end
+      expect(publisher).to have_received(:replace_instance_snapshot).once
+      expect(status.published_sequence).to eq(2)
+      expect(offering.weight_inputs[:provider]).to eq(110)
+      expect(offering.base_weight).to eq(227_700_000)
+    end
+
+    it 'publishes nothing when settings change without changing the weight pair' do
+      actor.manual
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      live_settings[:extensions][:llm][:openai][:unrelated] = 'changed'
+
+      actor.manual
+
+      expect(publisher).not_to have_received(:replace_instance_snapshot)
+      expect(alpha_state[:sequence]).to eq(1)
+    end
+
+    it 'preserves zero as a disable component and raises on false' do
+      live_settings[:extensions][:llm][:openai][:weight] = 0
+      expect(draft_for('gpt-4o').weight_inputs[:provider]).to eq(0)
+
+      live_settings[:extensions][:llm][:openai][:weight] = false
+      expect { draft_for('gpt-4o') }.to raise_error(ArgumentError, /Integer >= 0/)
+
+      actor.manual
+      expect(registry.snapshot.publication_status(instance_key: key_for(alpha_cfg))).to be_nil
+      expect(actor.instance_variable_get(:@instance_states)).not_to have_key('alpha')
+    end
+
+    it 'logs each dormant weight once, clears on appearance, and logs on re-disappearance' do
+      messages = []
+      logger = instance_double(Logger).as_null_object
+      allow(logger).to receive(:info) do |message = nil, &block|
+        messages << (message || block.call)
+      end
+      allow(actor).to receive(:log).and_return(logger)
+      provider = live_settings[:extensions][:llm][:openai]
+      provider[:instances][:ghost] = { weight: 125 }
+
+      actor.manual
+      actor.manual
+      provider[:instances].delete(:ghost)
+      actor.manual
+      provider[:instances][:ghost] = { weight: 125 }
+      actor.manual
+
+      expected = '[llm][openai] action=dormant_weight weight_key=[:openai, :instance, "ghost"] ' \
+                 'no_lane_published=true'
+      expect(messages.count(expected)).to eq(2)
+    end
+
+    it 'does not replace or advance sequence across ten unchanged ordinary passes' do
+      actor.manual
+      10.times { actor.manual }
+
+      expect(alpha_state[:sequence]).to eq(1)
+    end
+
+    it 'does not couple actor cadence or shutdown to the Legion::Settings lifecycle' do
+      %i[on_reload reload! reset! off_reload].each do |method_name|
+        allow(Legion::Settings).to receive(method_name)
+      end
+
+      actor.manual
+      actor.shutdown
+
+      %i[on_reload reload! reset! off_reload].each do |method_name|
+        expect(Legion::Settings).not_to have_received(method_name)
+      end
+    end
+
+    it 'serializes interleaved ordinary commits with monotonic publications and matching final cache' do
+      actor.manual
+      published = []
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_wrap_original do |original, **kwargs|
+        published << kwargs
+        original.call(**kwargs)
+      end
+      threads = %w[gpt-4.1 gpt-5.2].map do |model_id|
+        Thread.new do
+          actor.send(
+            :commit_discovered_offerings,
+            instance_id: 'alpha', state: alpha_state, offerings: [draft_for(model_id)]
+          )
+        end
+      end
+      threads.each(&:join)
+
+      expect(published.map { |entry| entry[:sequence] }).to eq([2, 3])
+      expect(published.map { |entry| entry[:offerings].first.model }.uniq.length).to eq(2)
+      expect(alpha_state[:offerings]).to eq(published.last[:offerings])
+      expect(alpha_state[:sequence]).to eq(3)
+    end
+
+    it 'leaves cache and sequence unchanged on replacement failure and retries on the next pass' do
+      actor.manual
+      state = alpha_state
+      original_offerings = state[:offerings]
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_raise(StandardError, 'publish failed')
+
+      expect do
+        actor.send(
+          :commit_discovered_offerings,
+          instance_id: 'alpha', state: state, offerings: [draft_for('gpt-5.2')]
+        )
+      end.to raise_error(StandardError, 'publish failed')
+      expect(state[:sequence]).to eq(1)
+      expect(state[:offerings]).to equal(original_offerings)
+
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      actor.send(
+        :commit_discovered_offerings,
+        instance_id: 'alpha', state: state, offerings: [draft_for('gpt-5.2')]
+      )
+      expect(state[:sequence]).to eq(2)
+      expect(state[:offerings].first.model).to eq('gpt-5.2')
+    end
+
+    it 'rebuilds from current settings after draft construction and before initial activation' do
+      live_settings[:extensions][:llm][:openai][:weight] = 100
+      entered_readiness = Queue.new
+      resume_readiness = Queue.new
+      allow(actor).to receive(:check_readiness) do
+        entered_readiness << true
+        resume_readiness.pop
+        readiness(ready: true)
+      end
+
+      worker = Thread.new { actor.manual }
+      entered_readiness.pop
+      live_settings[:extensions][:llm][:openai][:weight] = 125
+      resume_readiness << true
+      worker.join
+
+      state = alpha_state
+      expect(state[:published]).to be(true)
+      expect(state[:offerings].find { |item| item.model == 'gpt-4o' }.weight_inputs[:provider]).to eq(125)
+      record = registry.snapshot.offerings_for(instance_key: key_for(alpha_cfg)).find { |item| item.model == 'gpt-4o' }
+      expect(record.weight_inputs[:provider]).to eq(125)
+    end
+
+    it 'updates an unpublished cache without replacing or counting it as a dormant match' do
+      messages = []
+      logger = instance_double(Logger).as_null_object
+      allow(logger).to receive(:info) do |message = nil, &block|
+        messages << (message || block.call)
+      end
+      allow(actor).to receive_messages(log: logger, check_readiness: readiness(ready: false),
+                                       fetch_models: [{ id: 'gpt-4o' }])
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:replace_instance_snapshot).and_call_original
+      allow(publisher).to receive(:activate_instance_snapshot).and_call_original
+      live_settings[:extensions][:llm][:openai][:weight] = 100
+      actor.manual
+      live_settings[:extensions][:llm][:openai][:weight] = 130
+
+      actor.manual
+
+      state = alpha_state
+      expect(state[:published]).to be(false)
+      expect(state[:offerings].first.weight_inputs[:provider]).to eq(130)
+      expect(publisher).not_to have_received(:replace_instance_snapshot)
+      expect(publisher).not_to have_received(:activate_instance_snapshot)
+      expect(messages).to include(
+        '[llm][openai] action=dormant_weight weight_key=[:openai, :provider] no_lane_published=true'
+      )
+    end
+
+    it 'lets removal win a paused readiness race without late activation or display writes' do
+      entered_readiness = Queue.new
+      resume_readiness = Queue.new
+      allow(actor).to receive(:check_readiness) do
+        entered_readiness << true
+        resume_readiness.pop
+        readiness(ready: true)
+      end
+      allow(actor).to receive(:write_instance_health).and_call_original
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:activate_instance_snapshot).and_call_original
+
+      worker = Thread.new { actor.manual }
+      entered_readiness.pop
+      actor.send(:remove_instance_state, 'alpha')
+      resume_readiness << true
+      worker.join
+
+      expect(publisher).not_to have_received(:activate_instance_snapshot)
+      expect(actor).not_to have_received(:write_instance_health)
+      expect(actor.instance_variable_get(:@instance_states)).not_to have_key('alpha')
+    end
+
+    it 'keeps activation state unpublished on publisher failure and permits a later retry' do
+      publisher = actor.send(:publisher)
+      allow(publisher).to receive(:activate_instance_snapshot).and_raise(StandardError, 'activation failed')
+
+      actor.manual
+
+      state = alpha_state
+      expect(state[:published]).to be(false)
+      expect(state[:sequence]).to eq(0)
+      original_offerings = state[:offerings]
+
+      allow(publisher).to receive(:activate_instance_snapshot).and_call_original
+      actor.manual
+      expect(state[:published]).to be(true)
+      expect(state[:sequence]).to eq(1)
+      expect(state[:offerings]).not_to equal(original_offerings)
     end
   end
 

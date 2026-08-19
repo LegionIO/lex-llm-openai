@@ -8,6 +8,12 @@ module Legion
         # DiscoveryRefresh. Extracted to keep the main class and the evidence
         # module within Metrics limits.
         module DiscoveryDrafts
+          EVIDENCE_MAP_FIELDS = %i[operation_evidence capability_evidence].freeze
+          VALUE_EVIDENCE_FIELDS = %i[
+            context_evidence max_output_evidence embedding_dimensions_evidence
+            model_revision_evidence tokenizer_evidence
+          ].freeze
+
           private
 
           # -- Operation inference -----------------------------------------------
@@ -55,56 +61,31 @@ module Legion
           # -- Offerings change detection (D3) -----------------------------------
           # Time.now observed_at stamps in the evidence poison Data#==, so a
           # rebuilt-but-unchanged catalog would otherwise replace the snapshot
-          # every tick. Compare identity/status fields only.
+          # every tick. Every other OfferingDraft field is authoritative.
 
           def offerings_changed?(previous:, current:)
-            return true unless previous.size == current.size
+            offering_multiset(previous) != offering_multiset(current)
+          end
 
-            # Changed when any draft has no stable counterpart in the
-            # previous catalog (size mismatch or an identity/status diff).
-            current.any? do |draft|
-              previous.none? { |candidate| drafts_stable?(candidate, draft) }
+          def offering_multiset(offerings)
+            offerings.map { |draft| stable_draft_state(draft) }.tally
+          end
+
+          def stable_draft_state(draft)
+            state = draft.to_h
+            EVIDENCE_MAP_FIELDS.each do |field|
+              state[field] = state.fetch(field).transform_values do |evidence|
+                stable_evidence_state(evidence)
+              end
             end
-          end
-
-          def drafts_stable?(candidate, draft)
-            basic_fields_stable?(candidate, draft) &&
-              evidence_maps_stable?(candidate.operation_evidence, draft.operation_evidence) &&
-              evidence_maps_stable?(candidate.capability_evidence, draft.capability_evidence) &&
-              value_fields_stable?(candidate, draft) &&
-              candidate.quota_domains == draft.quota_domains &&
-              candidate.metadata == draft.metadata
-          end
-
-          def basic_fields_stable?(candidate, draft)
-            candidate.model == draft.model &&
-              candidate.tier == draft.tier &&
-              evidence_keys_stable?(candidate.operation_evidence, draft.operation_evidence) &&
-              evidence_keys_stable?(candidate.capability_evidence, draft.capability_evidence)
-          end
-
-          def evidence_keys_stable?(previous_map, current_map)
-            previous_map.keys.sort == current_map.keys.sort
-          end
-
-          def evidence_maps_stable?(previous_map, current_map)
-            previous_map.all? do |key, evidence|
-              other = current_map[key]
-              other&.status == evidence.status && other&.source == evidence.source
+            VALUE_EVIDENCE_FIELDS.each do |field|
+              state[field] = stable_evidence_state(state.fetch(field))
             end
+            state
           end
 
-          def value_fields_stable?(candidate, draft)
-            values_stable?(candidate.context_evidence, draft.context_evidence) &&
-              values_stable?(candidate.max_output_evidence, draft.max_output_evidence) &&
-              values_stable?(candidate.embedding_dimensions_evidence, draft.embedding_dimensions_evidence) &&
-              values_stable?(candidate.model_revision_evidence, draft.model_revision_evidence)
-          end
-
-          def values_stable?(previous_value, current_value)
-            previous_value.status == current_value.status &&
-              previous_value.value == current_value.value &&
-              previous_value.source == current_value.source
+          def stable_evidence_state(evidence)
+            evidence.to_h.except(:observed_at)
           end
         end
       end
