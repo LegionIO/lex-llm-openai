@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'digest'
-require 'uri'
 require 'legion/extensions/llm'
 
 module Legion
@@ -210,83 +208,29 @@ module Legion
             raise
           end
 
-          def discover_offerings(live: false, raise_on_unreachable: false, **filters)
-            return filter_cached_offerings(Array(@cached_offerings), filters) unless live
-
-            provider_health = health(live:)
-            @cached_offerings = discover_live_offerings(filters, provider_health, live:)
-            log_discover_complete(@cached_offerings)
-            @cached_offerings
-          rescue Faraday::ConnectionFailed, Faraday::TimeoutError => e
-            log.warn("[#{slug}] instance=#{provider_instance_id} unreachable: #{e.message}")
-            raise if raise_on_unreachable
-
-            []
-          end
-
-          # ── CapabilityPolicy integration ─────────────────────────────────
-          # Maps raw CAPABILITY_MAP symbol arrays to the boolean hash format
-          # that CapabilityPolicy.resolve expects as :provider_catalog.
-          CATALOG_CAPABILITY_MAPPING = {
-            completion: :completion,
-            streaming: :streaming,
-            function_calling: :tools,
-            tools: :tools,
-            vision: :vision,
-            structured_output: :structured_output,
-            reasoning: :thinking,
-            embedding: :embedding,
-            image_generation: :image,
-            audio_transcription: :audio_transcription,
-            audio_generation: :audio_speech
-          }.freeze
-
-          def discover_live_offerings(filters, provider_health, live:)
-            Array(list_models(live:, **filters)).filter_map do |model|
-              next unless model_matches_filters?(model, filters)
-              next unless model_allowed?(model.id)
-
-              log_model_discovered(model)
-              offering_from_model(model, health: provider_health)
-            end
-          end
-
-          def log_model_discovered(model)
-            log.debug(
-              "[#{slug}] instance=#{provider_instance_id} action=model_discovered " \
-              "model=#{model.id} family=#{model.family}"
-            )
-          end
-
-          def log_discover_complete(offerings)
-            log.info(
-              "[#{slug}] instance=#{provider_instance_id} action=discover_complete " \
-              "model_count=#{Array(offerings).size}"
-            )
-          end
+          # The read path is the base discover_offerings (07 C5): activated
+          # inventory offerings for this instance from the Registry snapshot.
+          # Publication is the DiscoveryRefresh writer's sole path.
 
           private
 
-          # Canonical boundary (N x N law): pipeline dispatch delivers
-          # Canonical::Message objects; the provider-native Chat facade
-          # delivers lex-llm Message. Both are object shapes the inherited
-          # OpenAI wire render consumes directly. Plain Hashes are the
-          # bypass class (the 2026-08-19 incident) — reject loudly, never
-          # fail opaquely downstream.
-          def render_payload(messages, tools:, temperature:, model:, stream:, schema:, thinking:, tool_prefs:) # rubocop:disable Metrics/ParameterLists
-            enforce_render_messages!(messages)
-            super
-          end
+          # OpenAI wire dialect (08 R4): o-series and gpt-5 reject temperature
+          # values other than 1.0, and search models take no temperature at
+          # all. The base funnel enforces canonical input before any rendering
+          # (08 F2); this render-path hook is the home of the per-model
+          # normalization.
+          def render_payload(messages, tools:, model:, stream:, schema:, thinking:, params:, tool_prefs:) # rubocop:disable Metrics/ParameterLists
+            payload = super
+            temperature = params&.temperature
+            return payload if temperature.nil?
 
-          def enforce_render_messages!(messages)
-            Array(messages).each do |msg|
-              next if msg.is_a?(Canonical::Message)
-              next if msg.is_a?(Legion::Extensions::Llm::Message)
-
-              raise ArgumentError,
-                    "openai provider input must be Canonical::Message objects, got #{msg.class} — " \
-                    'non-canonical message shapes must not cross the dispatch boundary'
+            normalized = normalize_openai_temperature(temperature, model)
+            if normalized.nil?
+              payload.delete(:temperature)
+            else
+              payload[:temperature] = normalized
             end
+            payload
           end
 
           def build_model_infos(body)
@@ -324,110 +268,6 @@ module Legion
             }
           end
 
-          def offering_from_model(model_info, health: {})
-            policy = resolve_model_policy(model_info)
-
-            Legion::Extensions::Llm::Routing::ModelOffering.new(
-              offering_attrs_for(model_info, policy, health:)
-            )
-          end
-
-          def resolve_model_policy(model_info)
-            catalog = capabilities_to_boolean_hash(capability_entry_for(model_info.id)[:capabilities])
-
-            Legion::Extensions::Llm::CapabilityPolicy.resolve(
-              real: {},
-              provider_catalog: catalog,
-              probe: {},
-              provider_envelope: {},
-              provider_config: provider_capability_config,
-              instance_config: instance_capability_config,
-              model_config: model_capability_config(model_info.id)
-            )
-          end
-
-          def offering_attrs_for(model_info, policy, health: {})
-            {
-              provider_family: :openai,
-              instance_id: offering_instance_id,
-              transport: offering_transport,
-              tier: offering_tier,
-              model: model_info.id,
-              canonical_model_alias: offering_alias(model_info),
-              model_family: infer_model_family(model_info.id),
-              usage_type: infer_usage_type(model_info),
-              capabilities: policy[:capabilities],
-              capability_sources: policy[:sources],
-              limits: { context_window: model_info.context_length }.compact,
-              health: health,
-              metadata: { capability_sources: policy[:sources] }
-            }
-          end
-
-          def offering_instance_id
-            derive_provider_instance_id
-          end
-
-          def derive_provider_instance_id
-            host_port = instance_host_port
-            parts = [host_port] + instance_credential_parts
-            parts.join('/')
-          end
-
-          def instance_host_port
-            uri = URI.parse(api_base.to_s)
-            "#{uri.host || 'api.openai.com'}:#{uri.port}"
-          rescue URI::InvalidURIError => e
-            handle_exception(e, level: :warn, handled: true, operation: 'openai.provider.instance_host_port')
-            'api.openai.com:443'
-          end
-
-          def instance_credential_parts
-            parts = []
-            key = config.openai_api_key
-            parts << "ak:#{::Digest::SHA256.hexdigest(key)[0, 8]}" if non_empty_string?(key)
-            org = config.openai_organization_id
-            parts << "org:#{org.strip}" if non_empty_string?(org)
-            proj = config.openai_project_id
-            parts << "proj:#{proj.strip}" if non_empty_string?(proj)
-            parts
-          end
-
-          def non_empty_string?(value)
-            value.is_a?(String) && !value.strip.empty?
-          end
-
-          def offering_alias(model_info)
-            model_info.respond_to?(:name) ? model_info.name : nil
-          end
-
-          def capabilities_to_boolean_hash(capability_symbols)
-            return {} unless capability_symbols.is_a?(Array)
-
-            result = {}
-            capability_symbols.each do |sym|
-              mapped = CATALOG_CAPABILITY_MAPPING[sym]
-              result[mapped] = true if mapped
-            end
-            result
-          end
-
-          def infer_model_family(model_id)
-            CAPABILITY_MAP.each_key do |prefix|
-              return prefix.tr('-', '_').to_sym if model_id.start_with?(prefix)
-            end
-            :unknown
-          end
-
-          def infer_usage_type(model_info)
-            caps = model_info.respond_to?(:capabilities) ? Array(model_info.capabilities) : []
-            return :embedding if caps.include?(:embedding)
-            return :moderation if caps.include?(:moderation)
-            return :image if caps.include?(:image)
-
-            :inference
-          end
-
           def fetch_model_detail(model_name)
             entry = capability_entry_for(model_name)
             ctx = entry[:context_window]
@@ -438,8 +278,11 @@ module Legion
             value.is_a?(Numeric) ? Time.at(value).utc : value
           end
 
-          def maybe_normalize_temperature(temperature, model)
-            model_id = model.id.to_s
+          # Per-model temperature normalization (the OpenAI wire dialect):
+          # search models take no temperature; o-series and gpt-5 only accept
+          # 1.0. Called from the render path with the canonical params value.
+          def normalize_openai_temperature(temperature, model)
+            model_id = model.to_s
             return nil if model_id.include?('-search')
             return 1.0 if model_id.match?(/^(o\d|gpt-5)/) && !temperature.nil? && (temperature.to_f - 1.0).abs.positive?
 

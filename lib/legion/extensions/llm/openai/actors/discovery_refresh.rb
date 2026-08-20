@@ -18,7 +18,6 @@ require 'legion/extensions/llm/inventory/identity'
 require 'legion/extensions/llm/inventory/records'
 require 'legion/extensions/llm/inventory/evidence'
 require 'legion/extensions/llm/inventory/probe_coordinator'
-require 'legion/extensions/llm/inventory/scoped_refresher'
 require 'legion/extensions/llm/routing/provider_outcome'
 require 'legion/extensions/llm/taxonomies'
 require 'legion/extensions/llm/capabilities'
@@ -94,12 +93,7 @@ module Legion
             # -- Publisher ----------------------------------------------------------
 
             def publisher
-              @publisher ||= Legion::Extensions::Llm::Inventory::Publisher.new(
-                provider_family: :openai,
-                compatibility_adapter: Legion::Extensions::Llm::Inventory::ScopedRefresher::LegacyCoordinatorAdapter.new(
-                  provider_family: :openai
-                )
-              )
+              @publisher ||= Legion::Extensions::Llm::Inventory::Publisher.new(provider_family: :openai)
             end
 
             # -- Cadence interval (D9) ----------------------------------------------

@@ -64,7 +64,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   it 'carries the folded system message through the actual callable into the rendered wire payload' do
     callable, capture = callable_wire_capture
 
-    callable.chat(messages: folded_messages, model: 'gpt-5.2')
+    callable.chat(folded_messages, model: 'gpt-5.2')
 
     expect(capture.fetch(:payload)[:messages]).to eq(
       [
@@ -78,32 +78,22 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # SSOT v3 local dispatch passed executor Hash messages straight to the
   # provider callable, bypassing the canonical contract; the resulting opaque
   # failure was misclassified as a provider error (25/25 failed openai
-  # dispatches). The boundary now rejects plain-Hash input loudly at both the
-  # fleet callable and the provider render seam.
+  # dispatches). The boundary rejects plain-Hash input loudly at the fleet
+  # callable; the base funnel enforces centrally before rendering (08 F2) —
+  # the render seam does not re-implement the check.
   describe 'dispatch boundary (canonical input only)' do
     let(:hash_messages) { [{ role: 'user', content: 'What is the capital of France?' }] }
 
     it 'rejects plain Hash messages at the fleet callable boundary' do
       callable, = callable_wire_capture
 
-      expect { callable.chat(messages: hash_messages, model: 'gpt-5.2') }
+      expect { callable.chat(hash_messages, model: 'gpt-5.2') }
         .to raise_error(ArgumentError, /Canonical::Message/)
     end
 
-    it 'rejects plain Hash messages at the provider render seam' do
-      expect do
-        provider.send(:render_payload, hash_messages, **render_kwargs)
-      end.to raise_error(ArgumentError, /Canonical::Message/)
-    end
-
-    it 'accepts provider-native lex-llm Message at the render seam (Chat facade shape)' do
-      payload = provider.send(
-        :render_payload,
-        [Legion::Extensions::Llm::Message.new(role: :user, content: 'brief')],
-        **render_kwargs
-      )
-
-      expect(payload[:messages]).to eq([{ role: 'user', content: 'brief' }])
+    it 'rejects plain Hash messages at the provider funnel (central enforcement)' do
+      expect { provider.chat(hash_messages, model: 'gpt-5.2') }
+        .to raise_error(ArgumentError, /Canonical::Message/)
     end
   end
 
@@ -125,17 +115,14 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(embed_model.modalities_output).to eq([:embeddings])
   end
 
-  it 'does not call publish_models_async (single SSOT v3 publication path via DiscoveryRefresh actor)' do
-    # §5: discover_offerings is a catalog query only. Publication is the
+  it 'serves offerings from the registry snapshot without a live catalog fetch (07 C5 read path)' do
+    # §5: discover_offerings is a snapshot read only. Publication is the
     # exclusive responsibility of the DiscoveryRefresh actor via
-    # Inventory::Publisher — not a second RegistryPublisher call here. The
-    # override never references a registry publisher (the base class method
-    # is absent from the class, asserted below).
-    stub_model_discovery
+    # Inventory::Publisher — not a second publication path here. No
+    # connection stub: a live /v1/models fetch would fail this example.
+    Legion::Extensions::Llm::Inventory::Registry.reset!
 
-    offerings = provider.discover_offerings(live: true)
-
-    expect(offerings).not_to be_empty
+    expect(provider.discover_offerings(live: true)).to be_empty
   end
 
   it 'does not ship a registry_publisher class method (SSOT v3: single publication path via DiscoveryRefresh)' do
@@ -236,19 +223,22 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   end
 
   def chat_payload
-    provider.send(:render_payload, [Legion::Extensions::Llm::Message.new(role: :user, content: 'brief')],
-                  tools: {}, temperature: 0.2, model: chat_model, stream: true, schema: nil,
-                  thinking: { effort: 'medium' }, tool_prefs: nil)
-  end
-
-  def render_kwargs
-    { tools: {}, temperature: nil, model: chat_model, stream: false, schema: nil,
-      thinking: nil, tool_prefs: nil }
+    provider.send(
+      :render_payload,
+      [Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'brief')],
+      tools: {},
+      params: Legion::Extensions::Llm::Canonical::Params.build(temperature: 0.2),
+      model: 'gpt-4o',
+      stream: true,
+      schema: nil,
+      thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.build(effort: 'medium'),
+      tool_prefs: nil
+    )
   end
 
   def expected_chat_payload
     {
-      model: 'gpt-5.2',
+      model: 'gpt-4o',
       messages: [{ role: 'user', content: 'brief' }],
       stream: true,
       temperature: 0.2,
@@ -310,9 +300,5 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       'usage' => { 'prompt_tokens' => 5, 'completion_tokens' => 1 },
       'model' => 'gpt-5.2'
     }
-  end
-
-  def stub_model_discovery
-    allow(provider.connection).to receive(:get).with('/v1/models').and_return(fake_response(models_body))
   end
 end

@@ -39,24 +39,22 @@ module Legion
           end
 
           # -- Fleet dispatch operations ----------------------------------------
-          # The fleet passes `model:` as a raw string (the offering's model id).
-          # chat/stream_chat render paths call `model.id` (maybe_normalize_
-          # temperature, render_payload), so a Model::Info is required there;
-          # embed/count_tokens/image/moderate accept the value verbatim (the
-          # image and moderation render paths embed `model` directly in the wire
-          # payload, so wrapping those would corrupt the request body).
+          # The fleet passes `model:` as the offering's raw model id (String).
+          # B4: the callable hands it to the wire unchanged — no wrapping, no
+          # default, no fallback. The 0.8.0 funnel renders `model:` verbatim
+          # into the payload, so a wrapped value would corrupt the request.
 
-          def chat(messages:, model:, **rest)
+          def chat(messages, model:, **rest)
             # Canonical boundary (N x N law): pipeline dispatch delivers
             # Canonical::Message objects only. Hash/legacy shapes are the
             # bypass class — reject loudly, never coerce.
             provider.enforce_canonical_messages!(messages)
-            provider.chat(messages: messages, model: to_model_info(model), **rest)
+            provider.chat(messages, model: model, **rest)
           end
 
-          def stream_chat(messages:, model:, **rest, &)
+          def stream_chat(messages, model:, **rest, &)
             provider.enforce_canonical_messages!(messages)
-            provider.stream_chat(messages: messages, model: to_model_info(model), **rest, &)
+            provider.stream_chat(messages, model: model, **rest, &)
           end
 
           def embed(text:, model:, **rest)
@@ -72,8 +70,8 @@ module Legion
             provider.image(prompt: prompt, model: model, **rest)
           end
 
-          def moderate(input, model:, **rest)
-            provider.moderate(input, model: model, **rest)
+          def moderate(input:, model:, **rest)
+            provider.moderate(input: input, model: model, **rest)
           end
 
           def normalize_dispatch_error(error:)
@@ -107,12 +105,6 @@ module Legion
           end
 
           private
-
-          def to_model_info(model)
-            return model if model.respond_to?(:id)
-
-            Legion::Extensions::Llm::Model::Info.new(id: model.to_s, provider: :openai)
-          end
 
           def classify_client_error(error:)
             status = error.respond_to?(:response_status) ? error.response_status : nil

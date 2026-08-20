@@ -26,9 +26,9 @@ class RecordingOpenaiProvider
     @call_count = 0
   end
 
-  # Faithful to the production base Provider contract (lex-llm 0.7.7): the
+  # Faithful to the production base Provider contract (lex-llm 0.8.0): the
   # dispatch boundary accepts Canonical::Message only and rejects anything
-  # else loudly.
+  # else loudly. chat/stream_chat take positional canonical messages (08 F1/F3).
   def enforce_canonical_messages!(messages)
     Array(messages).each do |message|
       next if message.is_a?(Legion::Extensions::Llm::Canonical::Message)
@@ -39,14 +39,14 @@ class RecordingOpenaiProvider
     end
   end
 
-  def chat(**kwargs)
+  def chat(_messages, model:, **)
     @call_count += 1
-    { role: 'assistant', content: 'test response', model: kwargs[:model] }
+    { role: 'assistant', content: 'test response', model: model }
   end
 
-  def stream_chat(**kwargs)
+  def stream_chat(_messages, model:, **)
     @call_count += 1
-    { role: 'assistant', content: 'streamed response', model: kwargs[:model] }
+    { role: 'assistant', content: 'streamed response', model: model }
   end
 
   def embed(**kwargs)
@@ -61,8 +61,9 @@ class RecordingOpenaiProvider
 end
 
 # Captures the exact `model:` value each dispatch op hands to the provider
-# boundary, proving the D15 raw-string-model handling (the counting double
-# above cannot, because it ignores model).
+# boundary, proving the B4 pass-through (the Selection-derived raw model id
+# reaches the provider unchanged — the counting double above cannot, because
+# it ignores model).
 class ModelCapturingOpenaiProvider
   attr_reader :received_models
 
@@ -70,7 +71,7 @@ class ModelCapturingOpenaiProvider
     @received_models = {}
   end
 
-  # Faithful to the production base Provider contract (lex-llm 0.7.7): the
+  # Faithful to the production base Provider contract (lex-llm 0.8.0): the
   # dispatch boundary accepts Canonical::Message only and rejects anything
   # else loudly.
   def enforce_canonical_messages!(messages)
@@ -83,11 +84,11 @@ class ModelCapturingOpenaiProvider
     end
   end
 
-  def chat(model:, **)
+  def chat(_messages, model:, **)
     record(:chat, model)
   end
 
-  def stream_chat(model:, **)
+  def stream_chat(_messages, model:, **)
     record(:stream_chat, model)
   end
 
@@ -103,7 +104,7 @@ class ModelCapturingOpenaiProvider
     record(:image, model)
   end
 
-  def moderate(_input, model:, **)
+  def moderate(model:, **)
     record(:moderate, model)
   end
 
@@ -812,12 +813,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       expect(outcome.reason.length).to be <= 1024
     end
 
-    describe 'fleet raw-string model (D15)' do
-      # The fleet passes model: as the offering's raw model id (String). The
-      # chat/stream_chat render path calls model.id, so the callable must hand
-      # the provider a Model::Info; the wire-payload ops (image, moderate) and
-      # the model-tolerant ops (embed, count_tokens) must receive the value
-      # verbatim.
+    describe 'fleet raw-string model (B4 pass-through)' do
+      # The fleet passes model: as the offering's raw model id (String). B4:
+      # the Selection-derived model reaches the wire unchanged on EVERY
+      # operation — no wrapping, no default, no fallback. The 0.8.0 renderer
+      # consumes the model verbatim, so a wrapped value would corrupt the
+      # request payload.
       let(:capturing) { ModelCapturingOpenaiProvider.new }
       let(:capturing_callable) do
         described_class.new(
@@ -827,34 +828,24 @@ RSpec.describe Legion::Extensions::Llm::Openai do
         )
       end
 
-      it 'wraps a raw string model into a Model::Info for chat' do
+      it 'hands the raw string model to the provider unchanged for chat' do
         messages = [Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'hi')]
-        capturing_callable.chat(messages: messages, model: 'gpt-4o')
+        capturing_callable.chat(messages, model: 'gpt-4o')
 
-        model = capturing.received_models[:chat]
-        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
-        expect(model.id).to eq('gpt-4o')
+        expect(capturing.received_models[:chat]).to eq('gpt-4o')
       end
 
-      it 'wraps a raw string model into a Model::Info for stream_chat' do
-        capturing_callable.stream_chat(messages: [], model: 'gpt-4o')
+      it 'hands the raw string model to the provider unchanged for stream_chat' do
+        capturing_callable.stream_chat([], model: 'gpt-4o')
 
-        model = capturing.received_models[:stream_chat]
-        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
-        expect(model.id).to eq('gpt-4o')
+        expect(capturing.received_models[:stream_chat]).to eq('gpt-4o')
       end
 
-      it 'passes a Model::Info through unchanged for chat' do
-        info = Legion::Extensions::Llm::Model::Info.new(id: 'gpt-4o', provider: :openai)
-        capturing_callable.chat(messages: [], model: info)
-        expect(capturing.received_models[:chat]).to equal(info)
-      end
-
-      it 'passes the raw model verbatim for ops that render it into the wire payload or ignore it' do
+      it 'passes the raw model verbatim for the one-shot ops' do
         capturing_callable.embed(text: 'hello', model: 'text-embedding-3-small')
         capturing_callable.count_tokens(messages: [], model: 'gpt-4o')
         capturing_callable.image(prompt: 'a cat', model: 'gpt-image-1', size: '1024x1024')
-        capturing_callable.moderate('hello', model: 'omni-moderation-latest')
+        capturing_callable.moderate(input: 'hello', model: 'omni-moderation-latest')
 
         expect(capturing.received_models[:embed]).to eq('text-embedding-3-small')
         expect(capturing.received_models[:count_tokens]).to eq('gpt-4o')

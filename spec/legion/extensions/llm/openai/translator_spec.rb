@@ -20,7 +20,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
             content: 'Hello'
           )
         ],
-        params: Legion::Extensions::Llm::Canonical::Params.new(
+        params: Legion::Extensions::Llm::Canonical::Params.build(
           max_tokens: 100,
           temperature: 0.5,
           top_p: 0.9,
@@ -107,7 +107,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
           ],
-          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.new(
+          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.build(
             effort: 'high'
           )
         )

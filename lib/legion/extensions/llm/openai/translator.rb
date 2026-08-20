@@ -63,7 +63,7 @@ module Legion
             apply_tools(wire, canonical_request) if canonical_request.tools&.any?
             apply_tool_choice(wire, canonical_request.tool_choice) if canonical_request.tool_choice
             apply_thinking(wire, canonical_request)
-            use_stream_usage(wire) if canonical_request.stream
+            wire[:stream_options] = { include_usage: true } if canonical_request.stream
 
             wire
           end
@@ -166,10 +166,6 @@ module Legion
             return unless effort
 
             wire[:reasoning_effort] = effort.to_s.downcase
-          end
-
-          def use_stream_usage(wire)
-            wire[:stream_options] = { include_usage: true }
           end
 
           def resolve_model(canonical_request)
@@ -313,13 +309,18 @@ module Legion
             {}
           end
 
+          # Edge translation (O03a): OpenAI wire usage spellings (Chat API
+          # prompt/completion_tokens, Responses API input/output_tokens) become canonical keys.
           def parse_usage(raw)
             return nil unless raw&.any?
 
-            normalized = raw.dup
-            normalized[:cache_read_tokens] ||= extract_nested_cached_tokens(raw)
-            normalized[:thinking_tokens] ||= extract_nested_reasoning_tokens(raw)
-            Canonical::Usage.from_hash(normalized)
+            source = raw.transform_keys { |key| key.respond_to?(:to_sym) ? key.to_sym : key }
+            Canonical::Usage.build(
+              input_tokens: source[:input_tokens] || source[:prompt_tokens],
+              output_tokens: source[:output_tokens] || source[:completion_tokens],
+              cache_read_tokens: extract_nested_cached_tokens(raw),
+              thinking_tokens: extract_nested_reasoning_tokens(raw)
+            )
           end
 
           def extract_nested_cached_tokens(raw)

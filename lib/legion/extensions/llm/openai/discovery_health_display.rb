@@ -13,8 +13,8 @@ module Legion
         # status API (D14). <config_name> is the settings key the instance was
         # discovered under — never the derived host:port id.
         module DiscoveryHealthDisplay
-          # Fleet operation → legacy capability name, matching
-          # ScopedRefresher::LegacyCoordinatorAdapter's LEGACY_CAPABILITIES.
+          # Fleet operation → display capability name for the settings
+          # projection read by the status API.
           LEGACY_CAPABILITY_NAMES = {
             chat: :completion,
             stream_chat: :streaming,
