@@ -17,6 +17,13 @@ module Legion
         # Defined in its own file so the actor runtime guard in
         # discovery_refresh.rb does not prevent specs from loading it.
         class OpenaiCallable
+          # Keys the base Provider exposes as named kwargs for the
+          # completion operations. Anything else the fleet passes (sampling
+          # scalars, `temperature` — a Canonical::Params member, 05 O4) is
+          # folded into Canonical::Params at the dispatch boundary.
+          COMPLETION_NAMED_KEYS = %i[tools schema thinking tool_prefs headers].freeze
+          EMBED_NAMED_KEYS = %i[dimensions headers].freeze
+
           def initialize(instance_cfg:, logger:, provider: nil)
             @instance_cfg = instance_cfg
             @logger = logger
@@ -49,21 +56,25 @@ module Legion
             # Canonical::Message objects only. Hash/legacy shapes are the
             # bypass class — reject loudly, never coerce.
             provider.enforce_canonical_messages!(messages)
-            provider.chat(messages, model: model, **rest)
+            named, params = split_fleet_kwargs(rest, COMPLETION_NAMED_KEYS)
+            provider.chat(messages, model: model, params: canonical_params(params), **named)
           end
 
           def stream_chat(messages, model:, **rest, &)
             provider.enforce_canonical_messages!(messages)
-            provider.stream_chat(messages, model: model, **rest, &)
+            named, params = split_fleet_kwargs(rest, COMPLETION_NAMED_KEYS)
+            provider.stream_chat(messages, model: model, params: canonical_params(params), **named, &)
           end
 
           def embed(text:, model:, **rest)
-            provider.embed(text: text, model: model, **rest)
+            named, params = split_fleet_kwargs(rest, EMBED_NAMED_KEYS)
+            provider.embed(text: text, model: model, params: params, **named)
           end
 
           def count_tokens(messages:, model:, **rest)
             provider.enforce_canonical_messages!(messages)
-            provider.count_tokens(messages: messages, model: model, **rest)
+            _named, params = split_fleet_kwargs(rest, [])
+            provider.count_tokens(messages: messages, model: model, params: params)
           end
 
           def image(prompt:, model:, **rest)
@@ -105,6 +116,24 @@ module Legion
           end
 
           private
+
+          # The 0.8.0 completion funnel receives canonical values only
+          # (08 F3): the folded wire params become a Canonical::Params at
+          # the dispatch boundary — temperature is a params member (05 O4),
+          # never a kwarg.
+          def canonical_params(params)
+            Legion::Extensions::Llm::Canonical::Params.from_hash(params)
+          end
+
+          # Split the fleet's **rest into the base Provider's named kwargs
+          # and a payload params hash (any passed :params merged with
+          # unknown keys).
+          def split_fleet_kwargs(rest, named_keys)
+            named = rest.slice(*named_keys)
+            extra = rest.reject { |key, _| named.key?(key) }
+            params = (extra.delete(:params) || {}).to_h.merge(extra)
+            [named, params]
+          end
 
           def classify_client_error(error:)
             status = error.respond_to?(:response_status) ? error.response_status : nil

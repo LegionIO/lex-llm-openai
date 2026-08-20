@@ -116,6 +116,19 @@ class ModelCapturingOpenaiProvider
   end
 end
 
+# Records the exact kwargs the callable hands the provider, proving the wire
+# params fold into Canonical::Params at the dispatch boundary (05 O4).
+class ParamsCapturingOpenaiProvider
+  attr_reader :received
+
+  def enforce_canonical_messages!(messages) = messages
+
+  def chat(_messages, model:, **rest)
+    @received = { model: model }.merge(rest)
+    {}
+  end
+end
+
 # Sentinel used only in conformance tests. OpenAI does not produce a distinct
 # flat instance-unavailable dispatch signal separate from overload; this
 # sentinel lets the shared examples prove that :instance_unavailable correctly
@@ -851,6 +864,22 @@ RSpec.describe Legion::Extensions::Llm::Openai do
         expect(capturing.received_models[:count_tokens]).to eq('gpt-4o')
         expect(capturing.received_models[:image]).to eq('gpt-image-1')
         expect(capturing.received_models[:moderate]).to eq('omni-moderation-latest')
+      end
+
+      it 'folds fleet wire params into Canonical::Params at the boundary (05 O4)' do
+        capturing = ParamsCapturingOpenaiProvider.new
+        callable = described_class.new(
+          instance_cfg: ssot_harness.instance_configs[0],
+          logger: Logger.new(File::NULL),
+          provider: capturing
+        )
+        callable.chat([], model: 'gpt-4o', temperature: 0.4, max_tokens: 100, params: { top_p: 0.9 })
+
+        params = capturing.received[:params]
+        expect(params).to be_a(Legion::Extensions::Llm::Canonical::Params)
+        expect(params.temperature).to eq(0.4)
+        expect(params.max_tokens).to eq(100)
+        expect(params.top_p).to eq(0.9)
       end
     end
   end
