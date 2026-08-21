@@ -26,9 +26,7 @@ module Legion
 
               Legion::Extensions::Llm::Fleet::ProviderResponder.call(
                 payload: envelope,
-                provider_family: Openai::PROVIDER_FAMILY,
-                provider_class: Openai::Provider,
-                provider_instances: -> { Openai.discover_instances }
+                provider_family: Openai::PROVIDER_FAMILY
               )
             rescue StandardError => e
               handle_exception(e, level: :error, handled: true, operation: 'openai.fleet_worker.handle_request')

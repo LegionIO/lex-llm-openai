@@ -130,11 +130,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   end
 
   it 'builds sanitized lex-llm registry events via the base RegistryEventBuilder' do
-    builder = Legion::Extensions::Llm::RegistryEventBuilder.new(provider_family: :openai)
+    builder = Legion::Extensions::Llm::RegistryEventBuilder.new(provider_family: :openai, provider_instance: :default)
     event = builder.model_available(chat_model, readiness: { ready: true })
 
     expect(event.to_h).to include(event_type: :offering_available)
     expect(event.to_h.dig(:offering, :provider_family)).to eq(:openai)
+    expect(event.to_h.dig(:offering, :provider_instance)).to eq('default')
     expect(event.to_h.dig(:offering, :model)).to eq('gpt-5.2')
   end
 
