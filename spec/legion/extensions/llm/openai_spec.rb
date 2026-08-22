@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'legion/extensions/llm/openai/helpers/callable'
 
 RSpec.describe Legion::Extensions::Llm::Openai do
   let(:provider) { described_class::Provider.new(Legion::Extensions::Llm.config) }
-  let(:chat_model) { Legion::Extensions::Llm::Model::Info.new(id: 'gpt-5.2', provider: :openai) }
 
   before do
     Legion::Extensions::Llm.config.openai_api_key = 'test-key'
@@ -101,23 +101,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(openai_capability_checks).to eq([true, true, true, true, true, false])
   end
 
-  it 'maps discovered models to Model::Info with static capability map' do
-    models = provider.send(:build_model_infos, models_body)
-
-    gpt_model = models.find { |m| m.id == 'gpt-5.2' }
-    embed_model = models.find { |m| m.id == 'text-embedding-3-small' }
-
-    expect(gpt_model).to be_a(Legion::Extensions::Llm::Model::Info)
-    expect(gpt_model.capabilities).to include(:completion, :streaming, :tools, :vision)
-    expect(gpt_model.modalities_input).to include(:text, :image)
-
-    expect(embed_model.capabilities).to eq([:embedding])
-    expect(embed_model.modalities_output).to eq([:embeddings])
-  end
-
   it 'serves offerings from the registry snapshot without a live catalog fetch (07 C5 read path)' do
     # §5: discover_offerings is a snapshot read only. Publication is the
-    # exclusive responsibility of the DiscoveryRefresh actor via
+    # exclusive responsibility of the discovery actor (Runners::Discovery) via
     # Inventory::Publisher — not a second publication path here. No
     # connection stub: a live /v1/models fetch would fail this example.
     Legion::Extensions::Llm::Inventory::Registry.reset!
@@ -125,18 +111,8 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     expect(provider.discover_offerings(live: true)).to be_empty
   end
 
-  it 'does not ship a registry_publisher class method (SSOT v3: single publication path via DiscoveryRefresh)' do
+  it 'does not ship a registry_publisher class method (SSOT v3: single publication path via the discovery actor)' do
     expect(described_class::Provider).not_to respond_to(:registry_publisher)
-  end
-
-  it 'builds sanitized lex-llm registry events via the base RegistryEventBuilder' do
-    builder = Legion::Extensions::Llm::RegistryEventBuilder.new(provider_family: :openai, provider_instance: :default)
-    event = builder.model_available(chat_model, readiness: { ready: true })
-
-    expect(event.to_h).to include(event_type: :offering_available)
-    expect(event.to_h.dig(:offering, :provider_family)).to eq(:openai)
-    expect(event.to_h.dig(:offering, :provider_instance)).to eq('default')
-    expect(event.to_h.dig(:offering, :model)).to eq('gpt-5.2')
   end
 
   it 'does not define local RegistryPublisher or RegistryEventBuilder classes' do
@@ -259,15 +235,6 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     ]
   end
 
-  def models_body
-    {
-      'data' => [
-        { 'id' => 'gpt-5.2', 'created' => 1 },
-        { 'id' => 'text-embedding-3-small', 'created' => 2 }
-      ]
-    }
-  end
-
   def fake_response(body)
     Struct.new(:body).new(body)
   end
@@ -280,7 +247,7 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       capture[:payload] = payload
       fake_response(completion_body)
     end
-    callable = described_class::OpenaiCallable.new(
+    callable = described_class::Helpers::Callable.new(
       instance_cfg: {}, logger: instance_double(Logger).as_null_object, provider: provider
     )
     [callable, capture]

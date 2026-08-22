@@ -12,9 +12,10 @@ module Legion
           include Legion::Logging::Helper
 
           # ── Static capability map for known OpenAI model families ──────
-          # Maps model-id prefixes to a set of capabilities and modality
-          # vectors. Used by list_models to build Model::Info structs from
-          # the raw /v1/models response.
+          # Maps model-id prefixes to a set of capabilities, modality
+          # vectors, and the family context window. Feeds the discovery
+          # runner's capability_entry_for (evidence publication) and the
+          # provider's fetch_model_detail (cached model context).
           CAPABILITY_MAP = {
             'gpt-4o' => {
               capabilities: %i[completion streaming function_calling tools vision structured_output],
@@ -196,21 +197,9 @@ module Legion
             raise
           end
 
-          def list_models(**)
-            log.debug('Listing OpenAI models')
-            raw = connection.get(models_url)
-            models = build_model_infos(raw.body)
-            log.debug { "Discovered #{models.size} OpenAI models" }
-            models
-          rescue StandardError => e
-            handle_exception(e, level: :error, handled: true,
-                                operation: 'list_models')
-            raise
-          end
-
           # The read path is the base discover_offerings (07 C5): activated
           # inventory offerings for this instance from the Registry snapshot.
-          # Publication is the DiscoveryRefresh writer's sole path.
+          # Publication is the discovery runner's sole path.
 
           private
 
@@ -233,29 +222,6 @@ module Legion
             payload
           end
 
-          def build_model_infos(body)
-            body.fetch('data', []).map do |raw_model|
-              id = raw_model.fetch('id')
-              cap_entry = capability_entry_for(id)
-              detail = model_detail(id)
-              ctx = detail&.dig(:context_window) || cap_entry[:context_window]
-
-              Legion::Extensions::Llm::Model::Info.new(
-                id: id,
-                name: id,
-                provider: :openai,
-                capabilities: cap_entry[:capabilities],
-                context_length: ctx,
-                modalities_input: cap_entry[:modalities_input],
-                modalities_output: cap_entry[:modalities_output],
-                metadata: {
-                  created_at: model_created_at(raw_model['created']),
-                  raw: raw_model
-                }.compact
-              )
-            end
-          end
-
           def capability_entry_for(model_id)
             CAPABILITY_MAP.each do |prefix, entry|
               return entry if model_id.start_with?(prefix)
@@ -272,10 +238,6 @@ module Legion
             entry = capability_entry_for(model_name)
             ctx = entry[:context_window]
             ctx ? { context_window: ctx } : nil
-          end
-
-          def model_created_at(value)
-            value.is_a?(Numeric) ? Time.at(value).utc : value
           end
 
           # Per-model temperature normalization (the OpenAI wire dialect):

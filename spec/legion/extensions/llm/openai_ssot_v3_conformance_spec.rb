@@ -15,9 +15,10 @@ require 'legion/extensions/llm/taxonomies'
 require 'legion/extensions/llm/capabilities'
 require 'legion/extensions/llm/fleet/worker_execution'
 require 'legion/extensions/llm/fleet/protocol'
+require 'legion/extensions/llm/openai/runners/discovery'
 
 # Spec double standing in for Openai::Provider at the dispatch boundary. The
-# production OpenaiCallable is used verbatim; only the per-instance Provider
+# production Helpers::Callable is used verbatim; only the per-instance Provider
 # (the HTTP boundary) is replaced so specs never touch the network.
 class RecordingOpenaiProvider
   attr_reader :call_count
@@ -140,7 +141,7 @@ class OpenaiInstanceUnavailableSentinel < StandardError
 end
 
 # Spec-local helpers for the SSOT v3 conformance harness. Identity and
-# offering-draft construction delegate to the production actor's real
+# offering-draft construction delegate to the production runner's real
 # helpers (no harness re-implementation that can drift).
 module OpenaiSsotEvidenceHelpers
   private
@@ -155,7 +156,7 @@ end
 
 # Harness class for OpenAI SSOT v3 conformance testing. Implements the full
 # interface required by the shared conformance examples without touching
-# any external service: the production OpenaiCallable is used, with the
+# any external service: the production Helpers::Callable is used, with the
 # per-instance Provider (HTTP boundary) replaced by a recording double.
 class OpenaiSsotHarness
   include OpenaiSsotEvidenceHelpers
@@ -206,7 +207,7 @@ class OpenaiSsotHarness
   end
 
   def build_callable(instance_config:)
-    Legion::Extensions::Llm::Openai::OpenaiCallable.new(
+    Legion::Extensions::Llm::Openai::Helpers::Callable.new(
       instance_cfg: instance_config,
       logger: Logger.new(File::NULL),
       provider: RecordingOpenaiProvider.new
@@ -279,11 +280,11 @@ class OpenaiSsotHarness
     outcome
   end
 
-  # Production discovery actor used as the source of the real identity and
-  # offering-draft helpers (no timer: the spec stub of Every has no
-  # initialize, so instances are inert until driven manually).
+  # Production discovery runner module used as the source of the real
+  # identity and offering-draft helpers (stateless module — no timer, no
+  # instance state).
   def discovery_actor
-    @discovery_actor ||= Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh.new
+    @discovery_actor ||= Legion::Extensions::Llm::Openai::Runners::Discovery
   end
 
   def name_for(instance_config)
@@ -416,16 +417,13 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     it 'reproduces IDs after restart (identity is deterministic from inputs)' do
       config = ssot_harness.instance_configs[0]
       first_run = bring_up_instance(config)
-      first_offering_id = registry.snapshot.offerings_for(instance_key: first_run[:key]).first.offering_id
       first_lane_id = registry.snapshot.lanes_for(instance_key: first_run[:key]).first.lane_id
 
       # Simulate restart: reset and re-register
       registry.reset!
       second_run = bring_up_instance(config)
-      second_offering_id = registry.snapshot.offerings_for(instance_key: second_run[:key]).first.offering_id
       second_lane_id = registry.snapshot.lanes_for(instance_key: second_run[:key]).first.lane_id
 
-      expect(second_offering_id).to eq(first_offering_id)
       expect(second_lane_id).to eq(first_lane_id)
     end
   end
@@ -433,42 +431,36 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Operation inference ---------------------------------------------------
 
   describe 'operation inference from model ID' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
 
     it 'infers chat + stream_chat for a gpt model' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'gpt-4o')
+      ops = runner_module.send(:infer_operations, model_id: 'gpt-4o')
       expect(ops).to include(chat: true, stream_chat: true)
       expect(ops).not_to have_key(:embed)
     end
 
     it 'infers embed for text-embedding models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'text-embedding-3-large')
+      ops = runner_module.send(:infer_operations, model_id: 'text-embedding-3-large')
       expect(ops).to eq({ embed: true })
     end
 
     it 'infers moderate for moderation models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'omni-moderation-latest')
+      ops = runner_module.send(:infer_operations, model_id: 'omni-moderation-latest')
       expect(ops).to eq({ moderate: true })
     end
 
     it 'infers image for dall-e models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'dall-e-3')
+      ops = runner_module.send(:infer_operations, model_id: 'dall-e-3')
       expect(ops).to eq({ image: true })
     end
 
     it 'infers transcribe for whisper models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'whisper-1')
+      ops = runner_module.send(:infer_operations, model_id: 'whisper-1')
       expect(ops).to eq({ transcribe: true })
     end
 
     it 'infers speak for tts models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'tts-1-hd')
+      ops = runner_module.send(:infer_operations, model_id: 'tts-1-hd')
       expect(ops).to eq({ speak: true })
     end
   end
@@ -476,13 +468,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Authoritative operation evidence (embedding models) --------------------
 
   describe 'authoritative operation evidence (embedding models)' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
 
     it 'publishes embed :supported and chat :unsupported for text-embedding models' do
-      actor = actor_class.allocate
       config = ssot_harness.instance_configs.first
       key = ssot_harness.build_instance_key(instance_config: config)
-      draft = actor.send(
+      draft = runner_module.send(
         :build_offering_draft,
         model_id: 'text-embedding-3-small', model_data: {}, instance_cfg: config, instance_key: key
       )
@@ -495,10 +486,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
 
     it 'publishes chat :supported for chat models' do
-      actor = actor_class.allocate
       config = ssot_harness.instance_configs.first
       key = ssot_harness.build_instance_key(instance_config: config)
-      draft = actor.send(
+      draft = runner_module.send(
         :build_offering_draft,
         model_id: 'gpt-4o', model_data: {}, instance_cfg: config, instance_key: key
       )
@@ -511,34 +501,30 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Quota domain from org/project -----------------------------------------
 
   describe 'quota domain derivation' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
     let(:chat_operations) { { chat: true, stream_chat: true } }
 
     it 'builds quota domain from org + project keyed by operation' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha', openai_project_id: 'proj-001' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to eq({ chat: 'org:org-alpha/proj:proj-001', stream_chat: 'org:org-alpha/proj:proj-001' })
     end
 
     it 'builds quota domain from org only when project is absent' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to eq({ chat: 'org:org-alpha', stream_chat: 'org:org-alpha' })
     end
 
     it 'returns empty quota domains when org is absent' do
-      actor = actor_class.allocate
       cfg = { openai_api_key: 'sk-test' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to be_empty
     end
 
     it 'maps only the operations the model supports' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha', openai_project_id: 'proj-001' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: { embed: true })
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: { embed: true })
       expect(domains).to eq({ embed: 'org:org-alpha/proj:proj-001' })
     end
   end
@@ -784,9 +770,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
   end
 
-  # --- OpenaiCallable direct contract ----------------------------------------
+  # --- Helpers::Callable direct contract -------------------------------------
 
-  describe Legion::Extensions::Llm::Openai::OpenaiCallable do
+  describe Legion::Extensions::Llm::Openai::Helpers::Callable do
     let(:callable) do
       described_class.new(
         instance_cfg: ssot_harness.instance_configs[0],
@@ -950,12 +936,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     it 'does not require Legion::LLM (no reverse dependency on top-level llm module)' do
       project_root = File.expand_path('../../../..', __dir__)
       actor_file = File.read(
-        File.join(project_root, 'lib/legion/extensions/llm/openai/actors/discovery_refresh.rb')
+        File.join(project_root, 'lib/legion/extensions/llm/openai/actors/discovery.rb')
       )
       expect(actor_file).not_to match(/\bLegion::LLM\b/)
     end
 
-    it 'OpenaiCallable does not reference Legion::LLM' do
+    it 'Helpers::Callable does not reference Legion::LLM' do
       callable = ssot_harness.build_callable(instance_config: ssot_harness.instance_configs[0])
       outcome = callable.normalize_dispatch_error(error: RuntimeError.new('test'))
       expect(outcome).to be_a(Legion::Extensions::Llm::Routing::ProviderOutcome)

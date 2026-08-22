@@ -115,6 +115,48 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     end
   end
 
+  context 'with a disabled named settings instance' do
+    before do
+      stub_settings(
+        instances: {
+          off: { openai_api_key: 'off-key', enabled: false },
+          on: { openai_api_key: 'on-key' }
+        }
+      )
+    end
+
+    it 'excludes the enabled: false instance and keeps the enabled one' do
+      expect(discover).not_to have_key(:off)
+      expect(discover).to have_key(:on)
+    end
+  end
+
+  context 'with enabled: false at the settings top level' do
+    before { stub_settings(api_key: 'settings-key', enabled: false) }
+
+    it 'excludes the :settings instance' do
+      expect(discover).not_to have_key(:settings)
+    end
+  end
+
+  context 'with credential-less named settings instances' do
+    before do
+      stub_settings(
+        instances: {
+          nokey: { openai_api_base: 'http://nowhere:4000' },
+          placeholder: { api_key: 'env://OPENAI_API_KEY' },
+          valid: { openai_api_key: 'valid-key' }
+        }
+      )
+    end
+
+    it 'excludes instances without a resolvable credential' do
+      expect(discover).not_to have_key(:nokey)
+      expect(discover).not_to have_key(:placeholder)
+      expect(discover).to have_key(:valid)
+    end
+  end
+
   context 'with multiple sources providing the same key' do
     before do
       stub_env('OPENAI_API_KEY', 'same-key')
