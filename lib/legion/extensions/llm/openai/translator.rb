@@ -111,9 +111,6 @@ module Legion
           def apply_format_params(wire, params)
             wire[:stop] = Array(params.stop_sequences) if params.stop_sequences
             wire[:response_format] = render_response_format(params.response_format) if params.response_format
-            return unless params.max_thinking_tokens
-
-            log.debug('[openai.translator] mapped to reasoning_effort via thinking config')
           end
 
           def render_response_format(fmt)
@@ -157,15 +154,12 @@ module Legion
           def apply_thinking(wire, canonical_request)
             thinking = canonical_request.thinking
             return unless thinking
+            return unless thinking.enabled?
 
-            effort = if thinking.respond_to?(:effort)
-                       thinking.effort
-                     else
-                       thinking[:effort] || thinking['effort']
-                     end
+            effort = thinking.resolved_effort
             return unless effort
 
-            wire[:reasoning_effort] = effort.to_s.downcase
+            wire[:reasoning_effort] = effort.downcase
           end
 
           def resolve_model(canonical_request)

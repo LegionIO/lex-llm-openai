@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.6] - 2026-08-25
+
+### Fixed
+- **Thinking contract aligned to lex-llm 0.8.x** — removed dead `params.max_thinking_tokens` reference in `apply_format_params` (NoMethodError on every request reaching this path since Params dropped that member). `apply_thinking` now gates on `thinking.enabled?` and uses `thinking.resolved_effort` so a budget-only client still yields `reasoning_effort` on the wire (never silently dropped). The `respond_to?(:effort)` Hash shim is removed — `thinking` is always a `Canonical::Thinking::Config` or nil.
+
 ## [Unreleased]
 
 ### Changed
