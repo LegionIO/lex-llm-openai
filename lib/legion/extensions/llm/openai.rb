@@ -5,7 +5,7 @@ require 'legion/extensions/llm/openai/provider'
 require 'legion/extensions/llm/openai/translator'
 require 'legion/extensions/llm/openai/instance_discovery'
 require 'legion/extensions/llm/openai/version'
-require 'legion/extensions/llm/openai/actors/discovery_refresh'
+require 'legion/extensions/llm/openai/actors/discovery'
 
 module Legion
   module Extensions

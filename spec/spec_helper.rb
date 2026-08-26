@@ -20,7 +20,14 @@ begin
     Gem.loaded_specs['lex-llm'].full_gem_path,
     'spec/legion/extensions/llm/conformance'
   )
-  Dir[File.join(kit_path, '**', '*.rb')].each { |f| require f }
+  # The kit's own *_spec.rb files are lex-llm's self-tests (they require
+  # lex-llm's spec_helper and support files); consumers load the shared
+  # example groups and fixtures only.
+  Dir[File.join(kit_path, '**', '*.rb')].each do |f|
+    next if f.end_with?('_spec.rb')
+
+    require f
+  end
   Legion::Logging.debug { "Conformance kit loaded from #{kit_path}" }
 rescue Gem::LoadError, StandardError => e
   Legion::Logging.warn("[spec_helper] conformance kit not available: #{e.message}")

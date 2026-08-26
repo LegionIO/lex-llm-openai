@@ -20,7 +20,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
             content: 'Hello'
           )
         ],
-        params: Legion::Extensions::Llm::Canonical::Params.new(
+        params: Legion::Extensions::Llm::Canonical::Params.build(
           max_tokens: 100,
           temperature: 0.5,
           top_p: 0.9,
@@ -29,8 +29,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
           seed: 42,
           frequency_penalty: 0.1,
           presence_penalty: 0.2,
-          response_format: { type: 'json_object' },
-          max_thinking_tokens: nil
+          response_format: { type: 'json_object' }
         )
       )
     end
@@ -100,14 +99,14 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
       end
     end
 
-    context 'with thinking config' do
+    context 'with thinking config (effort explicitly set)' do
       let(:canonical_request) do
         Legion::Extensions::Llm::Canonical::Request.build(
           routing: { model: 'gpt-4o' },
           messages: [
             Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
           ],
-          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.new(
+          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.build(
             effort: 'high'
           )
         )
@@ -116,6 +115,44 @@ RSpec.describe Legion::Extensions::Llm::Openai::Translator do
       it 'renders reasoning_effort' do
         wire = translator.render_request(canonical_request)
         expect(wire[:reasoning_effort]).to eq('high')
+      end
+    end
+
+    context 'with thinking config (budget-only, no explicit effort)' do
+      let(:canonical_request) do
+        Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
+          messages: [
+            Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
+          ],
+          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.build(
+            budget: 5000
+          )
+        )
+      end
+
+      it 'derives reasoning_effort from budget via resolved_effort' do
+        wire = translator.render_request(canonical_request)
+        expect(wire[:reasoning_effort]).to eq('medium')
+      end
+    end
+
+    context 'with thinking config disabled' do
+      let(:canonical_request) do
+        Legion::Extensions::Llm::Canonical::Request.build(
+          routing: { model: 'gpt-4o' },
+          messages: [
+            Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'test')
+          ],
+          thinking: Legion::Extensions::Llm::Canonical::Thinking::Config.build(
+            enabled: false, effort: 'high'
+          )
+        )
+      end
+
+      it 'does not emit reasoning_effort when disabled' do
+        wire = translator.render_request(canonical_request)
+        expect(wire).not_to have_key(:reasoning_effort)
       end
     end
 

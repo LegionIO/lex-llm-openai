@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.6] - 2026-08-25
+
+### Fixed
+- **Thinking contract aligned to lex-llm 0.8.x** — removed dead `params.max_thinking_tokens` reference in `apply_format_params` (NoMethodError on every request reaching this path since Params dropped that member). `apply_thinking` now gates on `thinking.enabled?` and uses `thinking.resolved_effort` so a budget-only client still yields `reasoning_effort` on the wire (never silently dropped). The `respond_to?(:effort)` Hash shim is removed — `thinking` is always a `Canonical::Thinking::Config` or nil.
+
+## [Unreleased]
+
+### Changed
+- **lex-llm 0.8.0 conformance** — the gem now runs against the 0.8.0 contract cut; lex-llm floor bumped to `>= 0.8.0`. Version remains 0.6.5 per the 0.8.0-conformant release law.
+- **Legacy offering production ripped** — the provider's legacy `discover_offerings` override and its `Routing::ModelOffering` production path (offering attrs, capability-policy resolution, instance-id derivation, filter helpers) are deleted; `discover_offerings` is now the base 0.8.0 read path serving activated offerings from the `Inventory::Registry` snapshot (07 C5). The `DiscoveryRefresh` writer (`OfferingDraft` + `WeightReconciler` + `Publisher`) remains the sole publication path.
+- **Legacy coordinator wiring ripped** — the `ScopedRefresher::LegacyCoordinatorAdapter` bridge is removed from the discovery actor (the file is gone from lex-llm 0.8.0); the `Publisher` is constructed without a compatibility adapter.
+- **Callable aligned to the 0.8.0 fleet dispatch shape** — `chat`/`stream_chat` take positional canonical `messages` (the 0.8.0 funnel signature) and hand the Selection-derived model to the wire UNCHANGED (B4): the `Model::Info` wrap for chat/stream_chat is deleted because the 0.8.0 renderer consumes `model:` verbatim (a wrapped value would serialize a Data object into the request payload). `moderate` now takes `input:` as a keyword, matching the base `Provider#moderate(input:, model:)` contract (the previous positional call raised `ArgumentError` against 0.8.0). Fleet wire params are folded into `Canonical::Params` at the dispatch boundary (`Canonical::Params.from_hash`; `temperature` is a params member, 05 O4 — it is no longer a named completion kwarg on any provider path); base named kwargs (`tools`/`schema`/`thinking`/`tool_prefs`/`headers`, and `dimensions`/`headers` for embed) pass through as-is. No tools/thinking wire rehydration — logged pre-existing gap, out of this wave.
+- **Renderer/parser on the 0.8.0 canonical contract** — `render_payload` renders from canonical values (`params:` replaces the deleted `temperature:` kwarg); the o-series/gpt-5 temperature clamp and `-search` suppression (previously reachable through the 0.7.x funnel hook) are preserved at the render path as `normalize_openai_temperature`. The local render-seam message check is deleted — canonical input is enforced centrally in the base `complete` funnel (08 F2). `Translator#parse_usage` translates the OpenAI wire spellings (`prompt_tokens`/`completion_tokens` and the Responses API `input_tokens`/`output_tokens`) to canonical keys at the edge (O03a: canonical types accept canonical keys only).
+- **RULES.md installed** at the repo root (byte-for-byte, the 0.8.0 architecture law mirror).
+
+### Removed
+- `Provider#enforce_render_messages!` and the legacy `Llm::Message` acceptance at the render seam (the type is deleted in 0.8.0; the Chat-facade shape is gone).
+- The capability-policy read-path spec (it pinned the deleted `Routing::ModelOffering` surface; the writer-path capability evidence is pinned by the discovery and conformance specs).
+
+## [0.6.5] - 2026-08-19
+
+### Changed
+- **Canonical dispatch boundary enforced** — `OpenaiCallable#chat`, `#stream_chat`, and `#count_tokens` now call `Provider#enforce_canonical_messages!` before delegating, and the provider's render seam accepts only `Canonical::Message` (pipeline dispatch) or provider-native `Legion::Extensions::Llm::Message` (Chat facade); anything else raises a loud `ArgumentError` at the boundary instead of failing opaquely downstream and being misclassified as a provider error. The 2026-08-19 incident: SSOT v3 local dispatch passed executor Hash messages straight to the provider callable, bypassing the canonical contract (25/25 failed openai dispatches). N x N law: client translator = client <-> Canonical, executor = Canonical throughout, provider translator = Canonical <-> provider wire — anything half-translated between Canonical and a legacy shape is the defect class this boundary kills.
+- **lex-llm floor bumped to >= 0.7.7** — for `Provider#enforce_canonical_messages!` and the canonical-only `count_tokens`.
+- **Local-tree lex-llm path dependency added to the test group** so the adjacent checkout resolves against unreleased 0.7.7 during development.
+
+### Added
+- Dispatch-boundary regression guards: plain-Hash input raises `ArgumentError` at both the fleet callable and the provider render seam; provider-native `Message` input renders to the unchanged OpenAI wire. Client request formats and the provider wire format are unchanged.
+
 ## [0.6.4] - 2026-08-19
 
 ### Fixed

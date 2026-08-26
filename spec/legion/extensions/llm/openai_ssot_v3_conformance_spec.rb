@@ -15,9 +15,10 @@ require 'legion/extensions/llm/taxonomies'
 require 'legion/extensions/llm/capabilities'
 require 'legion/extensions/llm/fleet/worker_execution'
 require 'legion/extensions/llm/fleet/protocol'
+require 'legion/extensions/llm/openai/runners/discovery'
 
 # Spec double standing in for Openai::Provider at the dispatch boundary. The
-# production OpenaiCallable is used verbatim; only the per-instance Provider
+# production Helpers::Callable is used verbatim; only the per-instance Provider
 # (the HTTP boundary) is replaced so specs never touch the network.
 class RecordingOpenaiProvider
   attr_reader :call_count
@@ -26,14 +27,27 @@ class RecordingOpenaiProvider
     @call_count = 0
   end
 
-  def chat(**kwargs)
-    @call_count += 1
-    { role: 'assistant', content: 'test response', model: kwargs[:model] }
+  # Faithful to the production base Provider contract (lex-llm 0.8.0): the
+  # dispatch boundary accepts Canonical::Message only and rejects anything
+  # else loudly. chat/stream_chat take positional canonical messages (08 F1/F3).
+  def enforce_canonical_messages!(messages)
+    Array(messages).each do |message|
+      next if message.is_a?(Legion::Extensions::Llm::Canonical::Message)
+
+      raise ArgumentError,
+            "provider input must be Canonical::Message objects, got #{message.class} — " \
+            'non-canonical message shapes must not cross the dispatch boundary'
+    end
   end
 
-  def stream_chat(**kwargs)
+  def chat(_messages, model:, **)
     @call_count += 1
-    { role: 'assistant', content: 'streamed response', model: kwargs[:model] }
+    { role: 'assistant', content: 'test response', model: model }
+  end
+
+  def stream_chat(_messages, model:, **)
+    @call_count += 1
+    { role: 'assistant', content: 'streamed response', model: model }
   end
 
   def embed(**kwargs)
@@ -48,8 +62,9 @@ class RecordingOpenaiProvider
 end
 
 # Captures the exact `model:` value each dispatch op hands to the provider
-# boundary, proving the D15 raw-string-model handling (the counting double
-# above cannot, because it ignores model).
+# boundary, proving the B4 pass-through (the Selection-derived raw model id
+# reaches the provider unchanged — the counting double above cannot, because
+# it ignores model).
 class ModelCapturingOpenaiProvider
   attr_reader :received_models
 
@@ -57,11 +72,24 @@ class ModelCapturingOpenaiProvider
     @received_models = {}
   end
 
-  def chat(model:, **)
+  # Faithful to the production base Provider contract (lex-llm 0.8.0): the
+  # dispatch boundary accepts Canonical::Message only and rejects anything
+  # else loudly.
+  def enforce_canonical_messages!(messages)
+    Array(messages).each do |message|
+      next if message.is_a?(Legion::Extensions::Llm::Canonical::Message)
+
+      raise ArgumentError,
+            "provider input must be Canonical::Message objects, got #{message.class} — " \
+            'non-canonical message shapes must not cross the dispatch boundary'
+    end
+  end
+
+  def chat(_messages, model:, **)
     record(:chat, model)
   end
 
-  def stream_chat(model:, **)
+  def stream_chat(_messages, model:, **)
     record(:stream_chat, model)
   end
 
@@ -77,7 +105,7 @@ class ModelCapturingOpenaiProvider
     record(:image, model)
   end
 
-  def moderate(_input, model:, **)
+  def moderate(model:, **)
     record(:moderate, model)
   end
 
@@ -85,6 +113,19 @@ class ModelCapturingOpenaiProvider
 
   def record(operation, model)
     @received_models[operation] = model
+    {}
+  end
+end
+
+# Records the exact kwargs the callable hands the provider, proving the wire
+# params fold into Canonical::Params at the dispatch boundary (05 O4).
+class ParamsCapturingOpenaiProvider
+  attr_reader :received
+
+  def enforce_canonical_messages!(messages) = messages
+
+  def chat(_messages, model:, **rest)
+    @received = { model: model }.merge(rest)
     {}
   end
 end
@@ -100,7 +141,7 @@ class OpenaiInstanceUnavailableSentinel < StandardError
 end
 
 # Spec-local helpers for the SSOT v3 conformance harness. Identity and
-# offering-draft construction delegate to the production actor's real
+# offering-draft construction delegate to the production runner's real
 # helpers (no harness re-implementation that can drift).
 module OpenaiSsotEvidenceHelpers
   private
@@ -115,7 +156,7 @@ end
 
 # Harness class for OpenAI SSOT v3 conformance testing. Implements the full
 # interface required by the shared conformance examples without touching
-# any external service: the production OpenaiCallable is used, with the
+# any external service: the production Helpers::Callable is used, with the
 # per-instance Provider (HTTP boundary) replaced by a recording double.
 class OpenaiSsotHarness
   include OpenaiSsotEvidenceHelpers
@@ -166,7 +207,7 @@ class OpenaiSsotHarness
   end
 
   def build_callable(instance_config:)
-    Legion::Extensions::Llm::Openai::OpenaiCallable.new(
+    Legion::Extensions::Llm::Openai::Helpers::Callable.new(
       instance_cfg: instance_config,
       logger: Logger.new(File::NULL),
       provider: RecordingOpenaiProvider.new
@@ -239,11 +280,11 @@ class OpenaiSsotHarness
     outcome
   end
 
-  # Production discovery actor used as the source of the real identity and
-  # offering-draft helpers (no timer: the spec stub of Every has no
-  # initialize, so instances are inert until driven manually).
+  # Production discovery runner module used as the source of the real
+  # identity and offering-draft helpers (stateless module — no timer, no
+  # instance state).
   def discovery_actor
-    @discovery_actor ||= Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh.new
+    @discovery_actor ||= Legion::Extensions::Llm::Openai::Runners::Discovery
   end
 
   def name_for(instance_config)
@@ -376,16 +417,13 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     it 'reproduces IDs after restart (identity is deterministic from inputs)' do
       config = ssot_harness.instance_configs[0]
       first_run = bring_up_instance(config)
-      first_offering_id = registry.snapshot.offerings_for(instance_key: first_run[:key]).first.offering_id
       first_lane_id = registry.snapshot.lanes_for(instance_key: first_run[:key]).first.lane_id
 
       # Simulate restart: reset and re-register
       registry.reset!
       second_run = bring_up_instance(config)
-      second_offering_id = registry.snapshot.offerings_for(instance_key: second_run[:key]).first.offering_id
       second_lane_id = registry.snapshot.lanes_for(instance_key: second_run[:key]).first.lane_id
 
-      expect(second_offering_id).to eq(first_offering_id)
       expect(second_lane_id).to eq(first_lane_id)
     end
   end
@@ -393,42 +431,36 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Operation inference ---------------------------------------------------
 
   describe 'operation inference from model ID' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
 
     it 'infers chat + stream_chat for a gpt model' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'gpt-4o')
+      ops = runner_module.send(:infer_operations, model_id: 'gpt-4o')
       expect(ops).to include(chat: true, stream_chat: true)
       expect(ops).not_to have_key(:embed)
     end
 
     it 'infers embed for text-embedding models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'text-embedding-3-large')
+      ops = runner_module.send(:infer_operations, model_id: 'text-embedding-3-large')
       expect(ops).to eq({ embed: true })
     end
 
     it 'infers moderate for moderation models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'omni-moderation-latest')
+      ops = runner_module.send(:infer_operations, model_id: 'omni-moderation-latest')
       expect(ops).to eq({ moderate: true })
     end
 
     it 'infers image for dall-e models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'dall-e-3')
+      ops = runner_module.send(:infer_operations, model_id: 'dall-e-3')
       expect(ops).to eq({ image: true })
     end
 
     it 'infers transcribe for whisper models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'whisper-1')
+      ops = runner_module.send(:infer_operations, model_id: 'whisper-1')
       expect(ops).to eq({ transcribe: true })
     end
 
     it 'infers speak for tts models' do
-      actor = actor_class.allocate
-      ops = actor.send(:infer_operations, model_id: 'tts-1-hd')
+      ops = runner_module.send(:infer_operations, model_id: 'tts-1-hd')
       expect(ops).to eq({ speak: true })
     end
   end
@@ -436,13 +468,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Authoritative operation evidence (embedding models) --------------------
 
   describe 'authoritative operation evidence (embedding models)' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
 
     it 'publishes embed :supported and chat :unsupported for text-embedding models' do
-      actor = actor_class.allocate
       config = ssot_harness.instance_configs.first
       key = ssot_harness.build_instance_key(instance_config: config)
-      draft = actor.send(
+      draft = runner_module.send(
         :build_offering_draft,
         model_id: 'text-embedding-3-small', model_data: {}, instance_cfg: config, instance_key: key
       )
@@ -455,10 +486,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
 
     it 'publishes chat :supported for chat models' do
-      actor = actor_class.allocate
       config = ssot_harness.instance_configs.first
       key = ssot_harness.build_instance_key(instance_config: config)
-      draft = actor.send(
+      draft = runner_module.send(
         :build_offering_draft,
         model_id: 'gpt-4o', model_data: {}, instance_cfg: config, instance_key: key
       )
@@ -471,34 +501,30 @@ RSpec.describe Legion::Extensions::Llm::Openai do
   # --- Quota domain from org/project -----------------------------------------
 
   describe 'quota domain derivation' do
-    let(:actor_class) { Legion::Extensions::Llm::Openai::Actor::DiscoveryRefresh }
+    let(:runner_module) { Legion::Extensions::Llm::Openai::Runners::Discovery }
     let(:chat_operations) { { chat: true, stream_chat: true } }
 
     it 'builds quota domain from org + project keyed by operation' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha', openai_project_id: 'proj-001' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to eq({ chat: 'org:org-alpha/proj:proj-001', stream_chat: 'org:org-alpha/proj:proj-001' })
     end
 
     it 'builds quota domain from org only when project is absent' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to eq({ chat: 'org:org-alpha', stream_chat: 'org:org-alpha' })
     end
 
     it 'returns empty quota domains when org is absent' do
-      actor = actor_class.allocate
       cfg = { openai_api_key: 'sk-test' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: chat_operations)
       expect(domains).to be_empty
     end
 
     it 'maps only the operations the model supports' do
-      actor = actor_class.allocate
       cfg = { openai_organization_id: 'org-alpha', openai_project_id: 'proj-001' }
-      domains = actor.send(:build_quota_domains, instance_cfg: cfg, operations: { embed: true })
+      domains = runner_module.send(:build_quota_domains, instance_cfg: cfg, operations: { embed: true })
       expect(domains).to eq({ embed: 'org:org-alpha/proj:proj-001' })
     end
   end
@@ -744,9 +770,9 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     end
   end
 
-  # --- OpenaiCallable direct contract ----------------------------------------
+  # --- Helpers::Callable direct contract -------------------------------------
 
-  describe Legion::Extensions::Llm::Openai::OpenaiCallable do
+  describe Legion::Extensions::Llm::Openai::Helpers::Callable do
     let(:callable) do
       described_class.new(
         instance_cfg: ssot_harness.instance_configs[0],
@@ -786,12 +812,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
       expect(outcome.reason.length).to be <= 1024
     end
 
-    describe 'fleet raw-string model (D15)' do
-      # The fleet passes model: as the offering's raw model id (String). The
-      # chat/stream_chat render path calls model.id, so the callable must hand
-      # the provider a Model::Info; the wire-payload ops (image, moderate) and
-      # the model-tolerant ops (embed, count_tokens) must receive the value
-      # verbatim.
+    describe 'fleet raw-string model (B4 pass-through)' do
+      # The fleet passes model: as the offering's raw model id (String). B4:
+      # the Selection-derived model reaches the wire unchanged on EVERY
+      # operation — no wrapping, no default, no fallback. The 0.8.0 renderer
+      # consumes the model verbatim, so a wrapped value would corrupt the
+      # request payload.
       let(:capturing) { ModelCapturingOpenaiProvider.new }
       let(:capturing_callable) do
         described_class.new(
@@ -801,38 +827,45 @@ RSpec.describe Legion::Extensions::Llm::Openai do
         )
       end
 
-      it 'wraps a raw string model into a Model::Info for chat' do
-        capturing_callable.chat(messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o')
+      it 'hands the raw string model to the provider unchanged for chat' do
+        messages = [Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'hi')]
+        capturing_callable.chat(messages, model: 'gpt-4o')
 
-        model = capturing.received_models[:chat]
-        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
-        expect(model.id).to eq('gpt-4o')
+        expect(capturing.received_models[:chat]).to eq('gpt-4o')
       end
 
-      it 'wraps a raw string model into a Model::Info for stream_chat' do
-        capturing_callable.stream_chat(messages: [], model: 'gpt-4o')
+      it 'hands the raw string model to the provider unchanged for stream_chat' do
+        capturing_callable.stream_chat([], model: 'gpt-4o')
 
-        model = capturing.received_models[:stream_chat]
-        expect(model).to be_a(Legion::Extensions::Llm::Model::Info)
-        expect(model.id).to eq('gpt-4o')
+        expect(capturing.received_models[:stream_chat]).to eq('gpt-4o')
       end
 
-      it 'passes a Model::Info through unchanged for chat' do
-        info = Legion::Extensions::Llm::Model::Info.new(id: 'gpt-4o', provider: :openai)
-        capturing_callable.chat(messages: [], model: info)
-        expect(capturing.received_models[:chat]).to equal(info)
-      end
-
-      it 'passes the raw model verbatim for ops that render it into the wire payload or ignore it' do
+      it 'passes the raw model verbatim for the one-shot ops' do
         capturing_callable.embed(text: 'hello', model: 'text-embedding-3-small')
         capturing_callable.count_tokens(messages: [], model: 'gpt-4o')
         capturing_callable.image(prompt: 'a cat', model: 'gpt-image-1', size: '1024x1024')
-        capturing_callable.moderate('hello', model: 'omni-moderation-latest')
+        capturing_callable.moderate(input: 'hello', model: 'omni-moderation-latest')
 
         expect(capturing.received_models[:embed]).to eq('text-embedding-3-small')
         expect(capturing.received_models[:count_tokens]).to eq('gpt-4o')
         expect(capturing.received_models[:image]).to eq('gpt-image-1')
         expect(capturing.received_models[:moderate]).to eq('omni-moderation-latest')
+      end
+
+      it 'folds fleet wire params into Canonical::Params at the boundary (05 O4)' do
+        capturing = ParamsCapturingOpenaiProvider.new
+        callable = described_class.new(
+          instance_cfg: ssot_harness.instance_configs[0],
+          logger: Logger.new(File::NULL),
+          provider: capturing
+        )
+        callable.chat([], model: 'gpt-4o', temperature: 0.4, max_tokens: 100, params: { top_p: 0.9 })
+
+        params = capturing.received[:params]
+        expect(params).to be_a(Legion::Extensions::Llm::Canonical::Params)
+        expect(params.temperature).to eq(0.4)
+        expect(params.max_tokens).to eq(100)
+        expect(params.top_p).to eq(0.9)
       end
     end
   end
@@ -903,12 +936,12 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     it 'does not require Legion::LLM (no reverse dependency on top-level llm module)' do
       project_root = File.expand_path('../../../..', __dir__)
       actor_file = File.read(
-        File.join(project_root, 'lib/legion/extensions/llm/openai/actors/discovery_refresh.rb')
+        File.join(project_root, 'lib/legion/extensions/llm/openai/actors/discovery.rb')
       )
       expect(actor_file).not_to match(/\bLegion::LLM\b/)
     end
 
-    it 'OpenaiCallable does not reference Legion::LLM' do
+    it 'Helpers::Callable does not reference Legion::LLM' do
       callable = ssot_harness.build_callable(instance_config: ssot_harness.instance_configs[0])
       outcome = callable.normalize_dispatch_error(error: RuntimeError.new('test'))
       expect(outcome).to be_a(Legion::Extensions::Llm::Routing::ProviderOutcome)

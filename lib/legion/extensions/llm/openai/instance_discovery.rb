@@ -7,8 +7,9 @@ module Legion
         # Candidate collection and normalization for Openai.discover_instances.
         # Extracted from the Openai module to keep it within Metrics limits.
         # The synthetic instances.default entry (placeholder env:// key nested
-        # under credentials) can surface here without a top-level api_key; the
-        # discovery actor skips credential-less candidates (D3).
+        # under credentials) can surface here without a top-level api_key;
+        # dedup_and_log_candidates skips disabled and credential-less
+        # candidates so discover_instances only returns claimable instances.
         module InstanceDiscovery
           extend Legion::Logging::Helper
 
@@ -67,11 +68,23 @@ module Legion
           end
 
           def dedup_and_log_candidates(candidates)
-            discovered = CredentialSources.dedup_credentials(candidates)
-                                          .transform_values { |cfg| sanitize_instance_config(cfg) }
+            deduped = CredentialSources.dedup_credentials(candidates)
+            discovered = deduped.reject { |_, config| config[:enabled] == false || unresolved_credential?(config) }
+                                .transform_values { |cfg| sanitize_instance_config(cfg) }
             instance_names = discovered.keys.sort_by(&:to_s).join(', ')
             log.debug { "Discovered #{discovered.size} OpenAI provider instance candidate(s): #{instance_names}" }
             discovered
+          end
+
+          # enabled: false is a skip, not a credential: a disabled instance is
+          # never claimed (the discovery pipeline reads this method as the
+          # single claimable source). A nil credential or an unresolved
+          # env:// / vault:// placeholder (the synthetic provider_settings
+          # default nests env://OPENAI_API_KEY) cannot authenticate and is
+          # never claimed.
+          def unresolved_credential?(config)
+            cred = config[:openai_api_key]
+            cred.nil? || cred.to_s.match?(%r{\A(vault|env)://})
           end
 
           def settings_instances(config)
