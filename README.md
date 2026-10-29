@@ -1,280 +1,171 @@
 # lex-llm-openai
 
-LegionIO LLM provider extension for OpenAI.
+OpenAI provider extension for LegionIO. Version **0.6.7**.
 
-This gem provides the `:openai` provider family implementation, enabling LegionIO to route chat, streaming, embedding, moderation, image, and audio requests to OpenAI-compatible APIs through the shared `lex-llm` provider contract.
-
-**Namespace:** `Legion::Extensions::Llm::Openai`
-**Version:** 0.3.11
+**Namespace:** `Legion::Extensions::Llm::Openai`  
 **Load:** `require 'legion/extensions/llm/openai'`
 
-## Quick Start
+Two authentication modes share the `:openai` family but remain independently named and selected:
+
+| Mode | Credentials | Provider boundary |
+|---|---|---|
+| `api_key` (default) | Existing OpenAI API-key configuration | OpenAI-compatible API |
+| `chatgpt` | A native, named Legion OAuth login | ChatGPT subscription Responses backend |
+
+A ChatGPT subscription is not an OpenAI API key. The extension never substitutes one mode, account, instance, or model for another after dispatch fails.
+
+## API-Key Usage
+
+Existing API-key discovery and operations remain available: chat, streaming, embeddings, moderation, images, and supported audio operations.
+
+The direct provider boundary accepts Canonical messages and an explicit selected model:
 
 ```ruby
 require 'legion/extensions/llm/openai'
 
-# Configure via the shared LLM configuration API
-Legion::Extensions::Llm.configure do |config|
-  config.openai_api_key = ENV.fetch("OPENAI_API_KEY")
-  config.default_model = "gpt-5.5"
-end
-
-# Use through the standard provider interface
-provider = Legion::Extensions::Llm::Openai::Provider.new
-provider.chat(model: "gpt-5.5", messages: [{ role: "user", content: "Hello" }])
+provider = Legion::Extensions::Llm::Openai::Provider.new(
+  { openai_api_key: ENV.fetch('OPENAI_API_KEY') }
+)
+messages = [
+  Legion::Extensions::Llm::Canonical::Message.build(role: :user, content: 'Hello')
+]
+response = provider.chat(messages, model: 'gpt-4o')
+puts response.text
 ```
 
-## What It Provides
+Daemon execution should use Legion's existing Router and exact dispatch path. Provider implementations do not choose a default or replacement model.
 
-| Capability | Endpoint | Notes |
-|---|---|---|
-| Chat completions | `POST /v1/chat/completions` | Includes function calling, vision, structured output |
-| Streaming chat | Same endpoint, `stream: true` | Token usage reported via `stream_usage_supported?` |
-| Model listing | `GET /v1/models` | Enriched with static capability map; publishes registry events |
-| Model retrieval | `GET /v1/models/{model}` | |
-| Embeddings | `POST /v1/embeddings` | |
-| Moderation | `POST /v1/moderations` | |
-| Image generation | `POST /v1/images/generations` | |
-| Image editing | `POST /v1/images/edits` | |
-| Image variation | `POST /v1/images/variations` | |
-| Audio transcription | `POST /v1/audio/transcriptions` | Whisper, gpt-4o-transcribe |
+## Native ChatGPT Login
 
-## Architecture
+The provider owns login, refresh, status, and logout. The CLI companion is tracked separately in [LegionIO#249](https://github.com/LegionIO/LegionIO/issues/249); the commands proposed there are not implemented by this gem.
 
-```
-Legion::Extensions::Llm::Openai
-|-- Openai                              # Root module — settings, discovery, auto-registration
-|   |-- default_settings                # Provider family defaults (endpoint, models, fleet)
-|   |-- discover_instances              # Credential scanning across env, Codex, Claude, settings
-|   |-- normalize_instance_config       # Normalizes generic keys to canonical OpenAI keys
-|   `-- sanitize_instance_config        # Strips temporary credential fields
-|
-|-- Provider                            # OpenAI provider implementation
-|   |-- Capabilities                    # Model family predicates (chat?, streaming?, vision?, etc.)
-|   |-- CAPABILITY_MAP                  # Static capability matrix for 14 known model families
-|   |-- list_models                     # Enriches raw API response with capability metadata
-|   |-- retrieve_model                  # Fetches single model detail
-|   |-- chat_url, models_url, etc.      # Endpoint builders
-|   `-- maybe_normalize_temperature     # Adjusts temperature for o*/gpt-5 reasoning models
-|
-|-- Actor::FleetWorker                  # Subscription actor for fleet request consumption
-|   |-- enabled?                        # Checks if any instance has respond_to_requests: true
-|   `-- Delegates to lex-llm ProviderResponder
-|
-|-- Actor::DiscoveryRefresh             # Periodic actor that refreshes the model discovery cache
-|   |-- time                            # Reads discovery_interval from settings (default 1800s)
-|   `-- Calls Legion::LLM::Discovery.refresh_discovered_models!
-|
-`-- Runners::FleetWorker                # Execution entrypoint for fleet requests
-    `-- handle_fleet_request            # Routes to lex-llm ProviderResponder.call
+### Configuration and TLS
+
+Subscription catalog and inference requests require **`lex-llm >= 0.8.5`** and **`extensions.llm.ssl.verify: true`**. The shared default remains `false`; subscription execution fails clearly unless it is explicitly enabled. There is no provider-local TLS-verification override.
+
+Merge this into the normal Legion settings tree:
+
+```json
+{
+  "extensions": {
+    "llm": {
+      "ssl": { "verify": true },
+      "openai": {
+        "instances": {
+          "personal": { "auth_mode": "chatgpt" }
+        }
+      }
+    }
+  }
+}
 ```
 
-### Design Boundaries
+Keep existing API-key instances unchanged. An `OPENAI_API_KEY` environment credential and the native `personal` login remain separate candidates. Native logins are discoverable without an explicit instance entry; configuration is useful for disabling an instance or setting existing weight/fleet options.
 
-- **Response normalization, request payload mapping** lives in `Lex-llm::Provider::OpenAICompatible` (mixed in)
-- **Fleet responder logic** (ack/reject, response publication) lives in `Lex-llm::Fleet::ProviderResponder`
-- **Registry event publishing** is delegated to `Lex-llm::RegistryPublisher`
-- This extension depends **only** on `lex-llm` at runtime; it does not depend on `legion-llm`
+OAuth grant requests use verified HTTPS independently of the inference connection setting. Fix certificate trust at the system/shared transport owner, not by disabling verification for native subscription traffic.
 
-## Instance Discovery
+### Browser and Device Authorization
 
-`Openai.discover_instances` scans 7 credential sources, deduplicates by key, and injects `default_model`:
-
-| Priority | Source | Key |
-|---|---|---|
-| 1 | `OPENAI_API_KEY` environment variable | `:env` |
-| 2 | `CODEX_API_KEY` environment variable | `:codex_env` |
-| 3 | Codex bearer token (`~/.codex/auth.json`) | `:codex` |
-| 4 | Codex OpenAI key (`~/.codex/auth.json`) | `:codex_key` |
-| 5 | Claude config (`openaiApiKey`) | `:claude` |
-| 6 | Extension settings (`extensions.llm.openai`) | `:settings` |
-| 7 | Named instances in extension settings | Named keys |
-
-## Configuration
-
-### Via Legion Settings (YAML)
-
-```yaml
-extensions:
-  llm:
-    openai:
-      api_key: "sk-..."
-      default_model: "gpt-5.5"
-      endpoint: "https://api.openai.com"
-      discovery_interval: 1800    # Seconds between model list refresh (used by DiscoveryRefresh actor)
-      instances:
-        primary:
-          openai_api_key: "sk-..."
-          openai_api_base: "https://api.openai.com"
-          fleet:
-            enabled: true
-            respond_to_requests: true
-            capabilities:
-              - chat
-              - stream_chat
-              - embed
-              - image
-```
-
-### Via Ruby Configuration API
+Browser flow:
 
 ```ruby
-Legion::Extensions::Llm.configure do |config|
-  config.openai_api_key = ENV.fetch("OPENAI_API_KEY")
-  config.openai_api_base = nil                     # defaults to https://api.openai.com
-  config.openai_organization_id = nil              # optional OpenAI-Organization header
-  config.openai_project_id = nil                   # optional OpenAI-Project header
-  config.openai_use_system_role = true             # include system messages in requests
-  config.default_model = "gpt-5.5"
-  config.default_embedding_model = "text-embedding-3-small"
-  config.default_moderation_model = "omni-moderation-latest"
-  config.default_image_model = "gpt-image-1"
-  config.default_transcription_model = "gpt-4o-transcribe"
+Legion::Extensions::Llm::Openai::Chatgpt::Auth.login(instance: 'personal') do |progress|
+  puts progress.fetch(:authorization_url)
 end
 ```
 
-### Default Settings
+Open the supplied URL in a browser. The flow uses PKCE S256 and a single-use state, with the fixed registered callback `http://localhost:1455/auth/callback`. An occupied port fails rather than silently changing redirect URLs.
+
+For a headless host, use device authorization:
 
 ```ruby
-Legion::Extensions::Llm::Openai.default_settings
-# {
-#   provider_family: :openai,
-#   instances: {
-#     default: {
-#       endpoint: "https://api.openai.com",
-#       default_model: "gpt-5.5",
-#       tier: :frontier,
-#       transport: :http,
-#       credentials: {
-#         api_key: "env://OPENAI_API_KEY",
-#         organization_id: nil,
-#         project_id: nil
-#       },
-#       usage: {
-#         inference: true,
-#         embedding: true,
-#         moderation: true,
-#         image: true,
-#         audio: true
-#       },
-#       limits: { concurrency: 4 },
-#       fleet: {
-#         enabled: false,
-#         respond_to_requests: false,
-#         capabilities: [:chat, :stream_chat, :embed, :image],
-#         lanes: [],
-#         concurrency: 4,
-#         queue_suffix: nil
-#       }
-#     }
-#   }
-# }
+Legion::Extensions::Llm::Openai::Chatgpt::Auth.login(instance: 'personal', device: true) do |progress|
+  puts progress.fetch(:verification_uri)
+  puts progress.fetch(:user_code)
+end
 ```
 
-## Model Capability Map
+`login` accepts `timeout:` in seconds (default 600, maximum 1800) and an optional `cancelled:` callable. Callback waits, device polling, and credential-lock waits honor cancellation/deadlines. Progress events contain the information needed for user approval, not access or refresh tokens. Do not persist authorization URLs or device codes in application logs.
 
-The provider maintains a static `CAPABILITY_MAP` covering 14 OpenAI model families. Each entry declares capabilities, input/output modalities, and context window size.
+### Status and Disconnect
 
-| Prefix | Capabilities | Input | Output | Context |
-|---|---|---|---|---|
-| `gpt-4o` | completion, streaming, function_calling, vision, structured_output | text, image, audio | text | 128K |
-| `gpt-4.1` | completion, streaming, function_calling, vision, structured_output | text, image | text | 1M |
-| `gpt-4` | completion, streaming, function_calling, vision | text, image | text | 128K |
-| `gpt-5` | completion, streaming, function_calling, vision, structured_output, reasoning | text, image | text | 1M |
-| `o4` | completion, streaming, function_calling, vision, reasoning | text, image | text | 200K |
-| `o3` | completion, streaming, function_calling, vision, reasoning | text, image | text | 200K |
-| `o1` | completion, streaming, function_calling, vision, reasoning | text, image | text | 200K |
-| `text-embedding-*` | embedding | text | embeddings | 8K |
-| `omni-moderation` | moderation | text, image | moderation | - |
-| `text-moderation` | moderation | text | moderation | - |
-| `gpt-image` | image_generation | text, image | image | - |
-| `dall-e` | image_generation | text | image | - |
-| `whisper` | audio_transcription | audio | text | - |
-| `tts` | audio_generation | text | audio | - |
-
-Unknown models default to `{ capabilities: [:completion, :streaming], modalities: { input: ["text"], output: ["text"] } }`.
-
-## Capability Predicates
-
-`Provider::Capabilities` provides module functions for model routing decisions:
-
-| Method | Matches |
-|---|---|
-| `chat?(model)` | Any model that is not embedding, moderation, image, audio, tts, realtime, or sora |
-| `streaming?(model)` | Same as `chat?` |
-| `functions?(model)` | Models starting with `gpt` or `o\d` |
-| `vision?(model)` | Models starting with `gpt`, `o\d`, or `omni-moderation` |
-| `embeddings?(model)` | Models starting with `text-embedding-` |
-| `moderation?(model)` | Models containing `moderation` |
-| `images?(model)` | Models starting with `gpt-image` or `dall-e` |
-| `audio_transcription?(model)` | Models matching `gpt-4o.*transcribe` or `whisper` |
-
-## Fleet Responder
-
-Provider instances can opt in to consuming Legion LLM fleet requests via the shared `ProviderResponder`. The fleet actor starts automatically when any instance has `respond_to_requests: true`.
-
-### Fleet YAML Configuration
-
-```yaml
-extensions:
-  llm:
-    openai:
-      instances:
-        local:
-          fleet:
-            enabled: true
-            respond_to_requests: true
-            capabilities:
-              - chat
-              - stream_chat
-              - embed
-              - image
+```ruby
+Legion::Extensions::Llm::Openai::Chatgpt::Auth.status(instance: 'personal')
+Legion::Extensions::Llm::Openai::Chatgpt::Auth.instances
+Legion::Extensions::Llm::Openai::Chatgpt::Auth.logout(instance: 'personal')
 ```
 
-### Fleet Components
+Status reads are local and do not refresh credentials. Results contain only:
 
-| Class | Role |
-|---|---|
-| `Actor::FleetWorker` | Subscription actor; checks `enabled?` against discovered instances |
-| `Runners::FleetWorker.handle_fleet_request` | Execution entrypoint; delegates to `ProviderResponder.call` |
+- `instance`, `auth_mode`, `status`
+- `account_id`, `workspace_id`, `expires_at`
 
-## Observability
+Status values are strings: `missing`, `authenticated`, `expired_refreshable`, or `reauth_required`. `instances` is keyed by the original instance name and excludes logged-out tombstones. Successful logout returns `missing`.
 
-All classes include `Legion::Logging::Helper`:
+### Credential Ownership and Lifecycle
 
-- **Structured error handling:** Every `rescue` calls `handle_exception` with operation context
-- **Debug-level request telemetry:** Model listing, retrieval, fleet dispatch, discovery refresh
-- **Info-level action logging:** Registry publishing, instance discovery results
-- **Automatic segment derivation:** Log lines tagged with provider family and component type
+Records live under `~/.legionio/auth/llm/openai/`, with reversible filename-safe encoding of exact instance names. Run login as the same OS user that runs Legion; another service account does not share the operator's home directory.
 
-## Dependencies
+- Auth directories require mode `0700`; regular record and stable lock files require `0600`, correct ownership, and a single link.
+- Symlinked paths, hardlinked records/locks, unsafe permissions, and invalid records fail closed. Existing nonsensitive settings ancestors are not silently chmodded.
+- Refresh rereads under a cross-process lock and atomically commits the replacement access token, refresh token, expiry, and identity before returning it.
+- Omitted refresh identity metadata is preserved. Contradictory account/workspace metadata is rejected; the selected account never changes implicitly.
+- Transient refresh failures retain the previous bundle. Definitively revoked grants require reauthentication.
+- Logout removes credentials while retaining a token-free generation barrier so a pending login cannot resurrect them. Concurrent refresh, replacement, and logout share the stable lock.
 
-| Gem | Purpose |
-|-----|---------|
-| `lex-llm` (>= 0.4.3) | Provider contract, OpenAICompatible mixin, fleet responder, registry publisher |
-| `legion-transport` (>= 1.4.14) | AMQP subscriptions and replies |
-| `legion-json` (>= 1.2.1) | JSON serialization |
-| `legion-logging` (>= 1.3.2) | Structured logging |
-| `legion-settings` (>= 1.3.14) | Configuration management |
+Never copy native token bundles into settings, inventory, telemetry, or fleet messages. No Codex/OMP subscription credential import or background copying is performed.
 
-## Key Files
+## Subscription Requests and Evidence
 
-| File | Purpose |
-|------|---------|
-| `lib/legion/extensions/llm/openai.rb` | Root module, settings, instance discovery, auto-registration |
-| `lib/legion/extensions/llm/openai/provider.rb` | Provider implementation, capability map, API methods |
-| `lib/legion/extensions/llm/openai/actors/discovery_refresh.rb` | Periodic model cache refresh actor |
-| `lib/legion/extensions/llm/openai/actors/fleet_worker.rb` | Fleet request subscription actor |
-| `lib/legion/extensions/llm/openai/runners/fleet_worker.rb` | Fleet request execution runner |
-| `lib/legion/extensions/llm/openai/version.rb` | Version constant |
+`Chatgpt::Provider` uses the inherited `lex-llm` constructor, completion funnel, and shared `Connection`. Its translator maps Canonical values directly to `https://chatgpt.com/backend-api/codex/responses`; requests use the exact selected model, `stream: true`, and `store: false`. Ordinary responses and streaming responses consume the same incremental SSE decoder.
+
+Supported provider-boundary behavior includes text, supported user images, function definitions and choices, correlated tool results, reasoning controls that the protocol can represent, opaque encrypted reasoning replay, usage, and explicit terminal/error states. Tool call IDs and opaque reasoning are not rewritten. A missing terminal response is an error, not a successful empty completion. Failed requests are not replayed by the provider.
+
+Encrypted reasoning is retained in `Response.metadata[:reasoning_items]` and `Thinking.metadata[:reasoning_items]`. A continuation `Canonical::Message` must preserve that state in `metadata[:reasoning_items]` (or its thinking content block metadata). Shared conversation/tool-loop code owns this continuation; the provider cannot reconstruct discarded opaque state.
+
+Explicit unsupported controls fail before credentials or inference HTTP are used. These include sampling controls, output token caps, stop sequences, penalties, seeds, output schemas/response formats, authoritative thinking budgets, extra request metadata, prompt-cache breakpoints, unsupported tool controls/content, and caller header overrides. They are not silently discarded to make a request appear successful.
+
+The account catalog comes from `codex/models?client_version=0.159.0`. Hidden entries are excluded; exact returned IDs are preserved. There are no synthetic model aliases or invented limit floors.
+
+- Only `chat` and `stream_chat` are published for subscription instances.
+- Context, vision, tools, and reasoning evidence comes from explicit account-catalog fields; absent evidence stays unknown.
+- The API-key provider's static capability map is never applied to subscription models.
+- Account/workspace identity determines the subscription quota domain. Different operator names remain distinct instances but share quota exclusions when they use the same account/workspace.
+- Credential rotation does not change routing identity. Account replacement requires a newly published binding; an already selected callable refuses the replacement account.
+
+## Discovery and Fleet Ownership
+
+API-key discovery retains `OPENAI_API_KEY`, `CODEX_API_KEY`, genuine Codex OpenAI keys, Claude `openaiApiKey`, extension-level settings, and named configured instances. Codex subscription bearer tokens are no longer misclassified as API keys. Existing shared credential-source probing controls still apply to those API-key sources.
+
+Native logins add candidates under their exact operator names. Explicit `enabled: false` disables a candidate. Conflicting API-key/native names or configured identities raise a configuration error rather than silently renaming or substituting accounts.
+
+`Runners::Discovery` uses the shared `Discovery::Pipeline` / `Inventory::Publisher` lifecycle. `Helpers::Callable` binds the authentication implementation once. Router, inventory identity, signed fleet envelopes, receiver validation, and Canonical rehydration remain shared-owner responsibilities. Fleet messages carry selected identity and request data, never OAuth credentials.
+
+## Release Gates and Known Shared Dependencies
+
+This implementation has local HTTP-fixture proof, not authenticated upstream compatibility certification. Release remains gated by:
+
+1. Shared TLS setting delivery: [lex-llm#51](https://github.com/LegionIO/lex-llm/pull/51), with verification explicitly enabled.
+2. CLI connection/status/disconnect integration: [LegionIO#249](https://github.com/LegionIO/LegionIO/issues/249).
+3. Shared `lex-llm` fleet tool-definition rehydration: serialized tool hashes currently reach the strict provider boundary without becoming `Canonical::ToolDefinition` values.
+4. Shared `legion-llm` native tool-loop preservation of encrypted reasoning metadata, and client stream adaptation of Hash tool fragments. The current runtime drops that state at those two boundaries.
+5. Authorized live browser/device login, restart/refresh/logout, account catalog, ordinary/streaming inference, and multi-turn tool verification.
+
+The provider does not bypass these shared boundaries. [Issue #16](https://github.com/LegionIO/lex-llm-openai/issues/16) remains the end-to-end acceptance tracker.
 
 ## Development
 
-```bash
+Runtime dependencies include `lex-llm >= 0.8.5`, `legion-settings >= 1.4.2`, `legion-transport >= 1.4.14`, `legion-json >= 1.2.1`, and `legion-logging >= 1.3.2`. There is no runtime dependency on `legion-llm`.
+
+The test bundle resolves the adjacent `lex-llm` checkout when available. Native regressions use synthetic credentials, real temporary stores, local HTTP peers, and real shared provider/fleet boundaries; no real account is needed.
+
+```sh
 bundle install
-bundle exec rspec
-bundle exec rubocop
+bundle exec rspec --format json --out tmp/rspec_results.json --format progress --out tmp/rspec_progress.txt
+bundle exec rubocop -A
 ```
+
+Capture remaining test-process stdout/stderr to local files when running the release gate. Do not inspect or print successful RSpec output; extract only failed examples when the exit status is nonzero.
 
 ## License
 

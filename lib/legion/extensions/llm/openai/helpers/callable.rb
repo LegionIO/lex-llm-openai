@@ -2,6 +2,9 @@
 
 require 'faraday'
 require 'legion/extensions/llm/routing/provider_outcome'
+require 'legion/extensions/llm/openai/instance_discovery'
+require 'legion/extensions/llm/openai/provider'
+require 'legion/extensions/llm/openai/chatgpt/provider'
 
 module Legion
   module Extensions
@@ -26,7 +29,15 @@ module Legion
             EMBED_NAMED_KEYS = %i[dimensions headers].freeze
 
             def initialize(instance_cfg:, logger:, provider: nil)
-              @instance_cfg = instance_cfg
+              normalized = Legion::Extensions::Llm::Openai::InstanceDiscovery.normalize_instance_config(instance_cfg)
+              @instance_cfg = normalized.transform_values do |value|
+                value.is_a?(String) ? value.dup.freeze : value
+              end.freeze
+              @provider_class = if @instance_cfg[:auth_mode] == :chatgpt
+                                  Legion::Extensions::Llm::Openai::Chatgpt::Provider
+                                else
+                                  Legion::Extensions::Llm::Openai::Provider
+                                end
               @logger = logger
               @injected_provider = provider
               @disconnected = false
@@ -43,7 +54,7 @@ module Legion
             end
 
             def provider
-              @provider ||= @injected_provider || Legion::Extensions::Llm::Openai::Provider.new(@instance_cfg)
+              @provider ||= @injected_provider || @provider_class.new(@instance_cfg)
             end
 
             # -- Fleet dispatch operations ----------------------------------------
@@ -87,28 +98,13 @@ module Legion
             end
 
             def normalize_dispatch_error(error:)
+              if error.is_a?(Legion::Extensions::Llm::Openai::Chatgpt::Error)
+                return normalize_chatgpt_error(error: error)
+              end
+
               reason = error.message.to_s[0, 512]
 
-              kind = case error
-                     when Faraday::ConnectionFailed
-                       :connection_failure
-                     when Faraday::TimeoutError
-                       :timeout
-                     when Faraday::ClientError
-                       classify_client_error(error: error)
-                     when Faraday::ServerError
-                       classify_server_error(error: error)
-                     when Legion::Extensions::Llm::OverloadedError
-                       :overloaded
-                     else
-                       # ServiceUnavailableError and all other error types map to
-                       # :provider_error. OpenAI does not produce a distinct flat
-                       # instance-down signal separate from overload; only an
-                       # authoritative explicit instance_unavailable condition
-                       # (which OpenAI does not emit via normal dispatch) would
-                       # map to :instance_unavailable.
-                       :provider_error
-                     end
+              kind = classify_api_error(error: error)
 
               Legion::Extensions::Llm::Routing::ProviderOutcome.new(
                 kind: kind,
@@ -117,6 +113,37 @@ module Legion
             end
 
             private
+
+            def classify_api_error(error:)
+              case error
+              when Faraday::ConnectionFailed
+                :connection_failure
+              when Faraday::TimeoutError
+                :timeout
+              when Faraday::ClientError
+                classify_client_error(error: error)
+              when Faraday::ServerError
+                classify_server_error(error: error)
+              when Legion::Extensions::Llm::OverloadedError
+                :overloaded
+              else
+                # API failures do not establish authoritative instance unavailability.
+                :provider_error
+              end
+            end
+
+            def normalize_chatgpt_error(error:)
+              if error.kind == :rate_limited && @instance_cfg[:auth_mode] == :chatgpt
+                identity = Legion::JSON.dump([@instance_cfg.fetch(:account_id), @instance_cfg[:workspace_id]])
+                quota_domain = Legion::Extensions::Llm::Routing::QuotaDomainKey.new(
+                  provider_family: :openai, opaque_id: "chatgpt:#{::Digest::SHA256.hexdigest(identity)}"
+                )
+              end
+              Legion::Extensions::Llm::Routing::ProviderOutcome.new(
+                kind: error.kind, reason: error.message, retry_after: error.retry_after,
+                quota_domain: quota_domain, metadata: error.metadata
+              )
+            end
 
             # The 0.8.0 completion funnel receives canonical values only
             # (08 F3): the folded wire params become a Canonical::Params at
