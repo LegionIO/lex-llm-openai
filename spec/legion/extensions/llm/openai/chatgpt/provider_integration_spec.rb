@@ -125,10 +125,15 @@ RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Provider do
     Legion::Settings[:extensions][:llm][:openai][:instances][:api] = {
       api_key: 'synthetic-api-key', openai_api_base: peer.url
     }
-    api_catalog = Legion::JSON.dump({ data: [{ id: 'gpt-4o' }] })
-    2.times { peer.reply(body: api_catalog, content_type: 'application/json') }
+    catalogs = {
+      nil => { data: [{ id: 'gpt-4o' }] },
+      'acct-personal' => { models: [{ slug: 'gpt-subscription', context_window: 200_000, supports_tools: true }] }
+    }
     seed_login
-    queue_catalog
+    4.times do
+      peer.reply(content_type: 'application/json',
+                 body: ->(request) { Legion::JSON.dump(catalogs.fetch(request[:headers]['chatgpt-account-id'])) })
+    end
     runner.reconcile_instances
 
     expect(lane(name: 'api').model).to eq('gpt-4o')
@@ -142,19 +147,34 @@ RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Provider do
     expect(Legion::JSON.load(requests.last[:body])[:model]).to eq('gpt-subscription')
   end
 
-  it 'keeps account catalogs separate and never fills absent evidence from the API model map' do
-    seed_login
-    seed_login(instance: 'work', account_id: 'acct-work', access_token: 'synthetic-work-token')
-    queue_catalog(model: 'gpt-4o', context_window: nil, supports_tools: nil)
-    queue_catalog(model: 'work-only')
-    runner.reconcile_instances
+  %i[ascending descending].each do |file_order|
+    it "keeps account catalogs separate with #{file_order} credential files and never fills absent API evidence" do
+      seed_login
+      seed_login(instance: 'work', account_id: 'acct-work', access_token: 'synthetic-work-token')
+      allow(Dir).to receive(:children).and_call_original
+      allow(Dir).to receive(:children).with(root).and_wrap_original do |enumerate, directory|
+        files = enumerate.call(directory).sort
+        file_order == :ascending ? files : files.reverse
+      end
+      catalogs = {
+        'acct-personal' => { models: [{ slug: 'gpt-4o' }] },
+        'acct-work' => { models: [{ slug: 'work-only', context_window: 200_000, supports_tools: true }] }
+      }
+      4.times do
+        peer.reply(content_type: 'application/json',
+                   body: lambda { |request|
+                     Legion::JSON.dump(catalogs.fetch(request[:headers].fetch('chatgpt-account-id')))
+                   })
+      end
+      runner.reconcile_instances
 
-    expect(lane.model).to eq('gpt-4o')
-    expect(lane(name: 'work').model).to eq('work-only')
-    expect(lane.context_evidence).to be_unknown
-    expect(lane.capability_evidence.fetch(:vision)).to be_unknown
-    expect(lane.capability_evidence.fetch(:tools)).to be_unknown
-    expect(lane.capability_evidence.fetch(:embedding)).to be_unsupported
+      expect(lane.model).to eq('gpt-4o')
+      expect(lane(name: 'work').model).to eq('work-only')
+      expect(lane.context_evidence).to be_unknown
+      expect(lane.capability_evidence.fetch(:vision)).to be_unknown
+      expect(lane.capability_evidence.fetch(:tools)).to be_unknown
+      expect(lane.capability_evidence.fetch(:embedding)).to be_unsupported
+    end
   end
 
   it 'shares account quota domains without collapsing operator instance identities' do

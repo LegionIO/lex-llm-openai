@@ -35,8 +35,11 @@ class ChatgptHttpFixture
     loop do
       socket = @server.accept
       begin
-        @requests << read_request(socket: socket)
-        write_response(socket: socket, response: @replies.pop)
+        request = read_request(socket: socket)
+        @requests << request
+        response = @replies.pop
+        response[:body] = response[:body].call(request) if response[:body].respond_to?(:call)
+        write_response(socket: socket, response: response)
       rescue Errno::EPIPE, Errno::ECONNRESET
         Legion::Logging.debug('Local ChatGPT fixture client disconnected')
       ensure
