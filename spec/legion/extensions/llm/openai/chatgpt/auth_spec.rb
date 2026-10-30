@@ -5,13 +5,23 @@ require_relative '../../../../../support/chatgpt_auth_fixture'
 
 RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Auth, :chatgpt_auth do
   let(:chatgpt) { Legion::Extensions::Llm::Openai::Chatgpt }
+  let(:oauth_settings) { { client_id: 'fixture-oauth-client' } }
 
-  it 'completes real loopback PKCE login and persists only a private token bundle' do
+  around do |example|
+    saved_extensions = Legion::Settings.loader.settings[:extensions]
+    Legion::Settings.loader.settings[:extensions] = { llm: { openai: { chatgpt: oauth_settings } } }
+    example.run
+  ensure
+    Legion::Settings.loader.settings[:extensions] = saved_extensions
+  end
+
+  it 'keeps the configured client through PKCE login even if settings change before code exchange' do
     server = with_oauth_server { |_request| [200, fixture_response] }
     progress = []
     callback = nil
     result = described_class.login(instance: 'personal', store: store, http: server.http, timeout: 5) do |event|
       progress << event
+      oauth_settings[:client_id] = 'fixture-replacement-client'
       callback = callback_thread(url: event.fetch(:authorization_url))
     end
     callback.value
@@ -19,8 +29,9 @@ RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Auth, :chatgpt_auth do
     exchanged = server.requests.pop
     challenge = Base64.urlsafe_encode64(Digest::SHA256.digest(exchanged[:body][:code_verifier]), padding: false)
     expect(authorization).to include('code_challenge' => challenge, 'code_challenge_method' => 'S256',
-                                     'scope' => 'openid profile email offline_access', 'originator' => 'legion')
-    expect(exchanged[:body]).to include(grant_type: 'authorization_code',
+                                     'scope' => 'openid profile email offline_access', 'originator' => 'legion',
+                                     'client_id' => 'fixture-oauth-client')
+    expect(exchanged[:body]).to include(grant_type: 'authorization_code', client_id: 'fixture-oauth-client',
                                         redirect_uri: 'http://localhost:1455/auth/callback')
     expect(result).to include(status: 'authenticated', instance: 'personal', account_id: 'fixture-account')
     expect((progress + [result]).to_s).not_to include('fixture-refresh', 'fixture-authorization-code', 'signature')
@@ -124,6 +135,8 @@ RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Auth, :chatgpt_auth do
                               verification_uri: 'https://auth.openai.com/codex/device', user_code: 'FIXTURE-CODE' }])
     expect(poll_times[1] - poll_times[0]).to be >= 0.04
     expect(poll_times[2] - poll_times[1]).to be >= 0.04
+    request_bodies = Array.new(server.requests.size) { server.requests.pop[:body] }
+    expect(request_bodies.values_at(0, -1)).to all(include(client_id: 'fixture-oauth-client'))
   end
 
   it 'treats an explicit device denial as final even on the pending HTTP status' do
@@ -190,6 +203,7 @@ RSpec.describe Legion::Extensions::Llm::Openai::Chatgpt::Auth, :chatgpt_auth do
                                               store: store, http: server.http)
     expect(credentials).to include(workspace_id: 'fixture-workspace', residency: 'us',
                                    refresh_token: 'fixture-refresh-rotated')
+    expect(server.requests.pop[:body]).to include(grant_type: 'refresh_token', client_id: 'fixture-oauth-client')
     expect do
       described_class.credentials(instance: 'personal', expected_account_id: 'fixture-account',
                                   expected_workspace_id: nil, store: store)

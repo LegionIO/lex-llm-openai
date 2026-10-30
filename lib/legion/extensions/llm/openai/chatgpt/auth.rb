@@ -3,6 +3,7 @@
 require 'digest'
 require 'securerandom'
 require 'legion/logging'
+require 'legion/extensions/llm/credential_sources'
 require_relative 'credential_store'
 require_relative 'oauth_http'
 require_relative 'browser_callback'
@@ -15,7 +16,6 @@ module Legion
         module Chatgpt
           # Coordinates interactive login and refresh while exposing only token-free status.
           module Auth
-            CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
             SCOPE = 'openid profile email offline_access'
             AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
             DEVICE_URL = 'https://auth.openai.com/codex/device'
@@ -77,6 +77,11 @@ module Legion
 
               private
 
+              def oauth_client_id
+                Legion::Extensions::Llm::CredentialSources.setting(:extensions, :llm, :openai, :chatgpt, :client_id) ||
+                  Legion::Extensions::Llm::Openai.default_settings.dig(:chatgpt, :client_id)
+              end
+
               def validate_login_dependencies!(dependencies:)
                 return if (dependencies.keys - %i[store http]).empty?
 
@@ -94,7 +99,7 @@ module Legion
 
               def refresh_bundle(http:, bundle:)
                 request = { path: '/oauth/token', form: true,
-                            body: { grant_type: 'refresh_token', client_id: CLIENT_ID,
+                            body: { grant_type: 'refresh_token', client_id: oauth_client_id,
                                     refresh_token: bundle[:refresh_token], scope: SCOPE } }
                 response = oauth_request(http: http, request: request, deadline: monotonic_time + 15,
                                          cancelled: nil, mode: :refreshing)
@@ -144,23 +149,24 @@ module Legion
               end
 
               def browser_login(http:, deadline:, cancelled:, &progress)
+                client_id = oauth_client_id
                 listener = Legion::Extensions::Llm::Openai::Chatgpt::BrowserCallback.new
                 verifier = SecureRandom.urlsafe_base64(48, false)
                 state = SecureRandom.urlsafe_base64(32, false)
-                url = authorization_url(verifier: verifier, state: state)
+                url = authorization_url(verifier: verifier, state: state, client_id: client_id)
                 progress&.call(status: 'authorization_required', authorization_url: url)
                 code = listener.receive_code(state: state, deadline: deadline, cancelled: cancelled)
                 grant = { code: code, code_verifier: verifier,
                           redirect_uri: Legion::Extensions::Llm::Openai::Chatgpt::BrowserCallback::REDIRECT_URI }
-                exchange_code(http: http, grant: grant, deadline: deadline, cancelled: cancelled)
+                exchange_code(http: http, grant: grant, client_id: client_id, deadline: deadline, cancelled: cancelled)
               ensure
                 listener&.close
               end
 
-              def authorization_url(verifier:, state:)
+              def authorization_url(verifier:, state:, client_id:)
                 challenge = Base64.urlsafe_encode64(Digest::SHA256.digest(verifier), padding: false)
                 query = URI.encode_www_form(
-                  response_type: 'code', client_id: CLIENT_ID,
+                  response_type: 'code', client_id: client_id,
                   redirect_uri: Legion::Extensions::Llm::Openai::Chatgpt::BrowserCallback::REDIRECT_URI,
                   scope: SCOPE, code_challenge: challenge, code_challenge_method: 'S256', state: state,
                   id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true', originator: 'legion'
@@ -169,7 +175,9 @@ module Legion
               end
 
               def device_login(http:, deadline:, cancelled:, &progress)
-                initialized = initialize_device(http: http, deadline: deadline, cancelled: cancelled)
+                client_id = oauth_client_id
+                initialized = initialize_device(http: http, client_id: client_id, deadline: deadline,
+                                                cancelled: cancelled)
                 interval = polling_interval(value: initialized.fetch(:interval, 5))
                 deadline = device_deadline(initialized: initialized, deadline: deadline)
                 progress&.call(status: 'authorization_required', verification_uri: DEVICE_URL,
@@ -177,7 +185,7 @@ module Legion
                 polled = poll_device(http: http, initialized: initialized, interval: interval,
                                      deadline: deadline, cancelled: cancelled)
                 grant = device_grant(polled: polled)
-                exchange_code(http: http, grant: grant, deadline: deadline, cancelled: cancelled)
+                exchange_code(http: http, grant: grant, client_id: client_id, deadline: deadline, cancelled: cancelled)
               end
 
               def poll_device(http:, initialized:, interval:, deadline:, cancelled:)
@@ -195,8 +203,8 @@ module Legion
                 end
               end
 
-              def initialize_device(http:, deadline:, cancelled:)
-                request = { path: '/api/accounts/deviceauth/usercode', form: false, body: { client_id: CLIENT_ID } }
+              def initialize_device(http:, client_id:, deadline:, cancelled:)
+                request = { path: '/api/accounts/deviceauth/usercode', form: false, body: { client_id: client_id } }
                 initialized = oauth_request(http: http, request: request, deadline: deadline, cancelled: cancelled)
                 %i[device_auth_id user_code].each { |field| validate_oauth_string(value: initialized[field]) }
                 initialized
@@ -244,9 +252,9 @@ module Legion
                 ), cause: nil
               end
 
-              def exchange_code(http:, grant:, deadline:, cancelled:)
+              def exchange_code(http:, grant:, client_id:, deadline:, cancelled:)
                 request = { path: '/oauth/token', form: true,
-                            body: { grant_type: 'authorization_code', client_id: CLIENT_ID }.merge(grant) }
+                            body: { grant_type: 'authorization_code', client_id: client_id }.merge(grant) }
                 response = oauth_request(http: http, request: request, deadline: deadline, cancelled: cancelled)
                 Legion::Extensions::Llm::Openai::Chatgpt::TokenBundle.from_response(response: response)
               end

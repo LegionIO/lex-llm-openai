@@ -20,7 +20,7 @@ module Legion
         PROVIDER_FAMILY = :openai
 
         def self.default_settings
-          ::Legion::Extensions::Llm.provider_settings(
+          base = ::Legion::Extensions::Llm.provider_settings(
             family: PROVIDER_FAMILY,
             instance: {
               auth_mode: :api_key,
@@ -47,6 +47,7 @@ module Legion
               }
             }
           )
+          base.merge(chatgpt: { client_id: 'app_EMoamEEZ73f0CkXaXp7hrann' })
         end
 
         def self.provider_class

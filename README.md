@@ -51,6 +51,9 @@ Merge this into the normal Legion settings tree:
     "llm": {
       "ssl": { "verify": true },
       "openai": {
+        "chatgpt": {
+          "client_id": "app_EMoamEEZ73f0CkXaXp7hrann"
+        },
         "instances": {
           "personal": { "auth_mode": "chatgpt" }
         }
@@ -61,6 +64,8 @@ Merge this into the normal Legion settings tree:
 ```
 
 Keep existing API-key instances unchanged. An `OPENAI_API_KEY` environment credential and the native `personal` login remain separate candidates. Native logins are discoverable without an explicit instance entry; configuration is useful for disabling an instance or setting existing weight/fleet options.
+
+`extensions.llm.openai.chatgpt.client_id` is the public OAuth application ID used for browser authorization, device authorization, and token refresh. It defaults to the value shown above; omit `chatgpt` to keep that default. Override it with an OpenAI-registered client that supports the existing authorization flows and redirect URIs. After changing it, log in again: existing refresh tokens belong to the previous OAuth application. An in-progress login retains the client ID it started with.
 
 OAuth grant requests use verified HTTPS independently of the inference connection setting. Fix certificate trust at the system/shared transport owner, not by disabling verification for native subscription traffic.
 

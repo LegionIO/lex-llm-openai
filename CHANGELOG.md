@@ -4,6 +4,7 @@
 
 ### Added
 - Native, independently named ChatGPT subscription instances in the existing OpenAI family, with browser PKCE and device login, token-free status, serialized refresh, and logout generation barriers.
+- Configurable `extensions.llm.openai.chatgpt.client_id` with the existing Codex public client ID as its default; browser/device login retain the selected client through code exchange, and refresh uses the configured client.
 - Owner-only durable credential storage, atomic token rotation, account/workspace binding checks, bounded login cancellation/deadlines, and explicit reauthentication state for revoked grants.
 - Subscription Responses translation and incremental SSE decoding through the inherited shared provider/connection funnel, preserving correlated tool calls, encrypted reasoning, usage, terminal state, and safe typed errors.
 - Account-specific exact model discovery and conservative capability/operation evidence; account/workspace quota domains remain stable across access-token rotation.
