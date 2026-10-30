@@ -6,6 +6,7 @@ require 'digest'
 require 'legion/extensions/llm/discovery/pipeline'
 require 'legion/extensions/llm/openai/helpers/callable'
 require 'legion/extensions/llm/openai/provider'
+require 'legion/extensions/llm/openai/chatgpt/provider'
 
 module Legion
   module Extensions
@@ -38,6 +39,10 @@ module Legion
             # ── OpenAI instance-config keys / connection ──────────────────────
 
             def catalog_base_url(instance_cfg:)
+              if instance_cfg[:auth_mode] == :chatgpt
+                return Legion::Extensions::Llm::Openai::Chatgpt::Provider::DEFAULT_ENDPOINT
+              end
+
               instance_cfg[:openai_api_base] || 'https://api.openai.com'
             end
 
@@ -58,6 +63,29 @@ module Legion
 
             def health_path = '/v1/models'
 
+            def fetch_raw_models(instance_cfg:)
+              return super unless instance_cfg[:auth_mode] == :chatgpt
+
+              provider = Legion::Extensions::Llm::Openai::Chatgpt::Provider.new(instance_cfg)
+              provider.catalog
+            ensure
+              provider&.disconnect
+            end
+
+            def check_health(instance_cfg:)
+              return super unless instance_cfg[:auth_mode] == :chatgpt
+
+              fetch_raw_models(instance_cfg: instance_cfg)
+              Legion::Extensions::Llm::Inventory::ReadinessResult.new(ready: true,
+                                                                      reason: 'ChatGPT account catalog is reachable')
+            rescue Legion::Extensions::Llm::Openai::Chatgpt::Error => e
+              raise unless %i[authentication authorization billing invalid_request].include?(e.kind)
+
+              handle_exception(e, level: :warn, handled: true, operation: 'openai.runner.discovery.chatgpt_health')
+              Legion::Extensions::Llm::Inventory::ReadinessResult.new(ready: false, reason: e.message,
+                                                                      metadata: { kind: e.kind })
+            end
+
             def build_callable(instance_cfg:)
               Legion::Extensions::Llm::Openai::Helpers::Callable.new(instance_cfg: instance_cfg, logger: log)
             end
@@ -66,6 +94,10 @@ module Legion
 
             def derive_physical_id(instance_cfg:)
               host_port = extract_host_port(url: catalog_base_url(instance_cfg: instance_cfg))
+              if instance_cfg[:auth_mode] == :chatgpt
+                return "#{host_port}/#{chatgpt_quota_domain(instance_cfg: instance_cfg)}"
+              end
+
               parts = [host_port]
               parts.concat(identity_parts_for(instance_cfg: instance_cfg))
               parts.join('/')
@@ -84,22 +116,30 @@ module Legion
 
             def build_offering_draft(instance_cfg:, instance_key:, model_id:, model_data:)
               tier = instance_cfg[:tier] || :frontier
-              operations = infer_operations(model_id: model_id)
+              subscription = instance_cfg[:auth_mode] == :chatgpt
+              operations = subscription ? { chat: true, stream_chat: true } : infer_operations(model_id: model_id)
 
               Legion::Extensions::Llm::Inventory::OfferingDraft.new(
                 provider_native_key: model_id,
                 model: model_id,
                 tier: tier,
                 operation_evidence: build_operation_evidence(operations: operations),
-                capability_evidence: build_capability_evidence(model_id: model_id),
-                context_evidence: build_context_evidence(model_id: model_id, model_data: model_data),
+                capability_evidence: if subscription
+                                       build_chatgpt_capability_evidence(model_data: model_data)
+                                     else
+                                       build_capability_evidence(model_id: model_id)
+                                     end,
+                context_evidence: build_context_evidence(model_id: model_id, model_data: model_data,
+                                                         instance_cfg: instance_cfg),
                 max_output_evidence: build_max_output_evidence(model_data: model_data),
-                embedding_dimensions_evidence: build_embedding_dimensions_evidence(model_id: model_id,
-                                                                                   model_data: model_data),
+                embedding_dimensions_evidence: build_embedding_dimensions_evidence(
+                  model_id: model_id, model_data: model_data, instance_cfg: instance_cfg
+                ),
                 model_revision_evidence: build_model_revision_evidence(model_data: model_data),
                 tokenizer_evidence: absent_value_evidence,
                 quota_domains: build_quota_domains(instance_cfg: instance_cfg, operations: operations),
-                metadata: build_offering_metadata(model_id: model_id, instance_key: instance_key).freeze,
+                metadata: build_offering_metadata(model_id: model_id, instance_key: instance_key,
+                                                  instance_cfg: instance_cfg).freeze,
                 publication_source: :provider_catalog
               )
             end
@@ -139,6 +179,11 @@ module Legion
             end
 
             def build_quota_domains(instance_cfg:, operations:)
+              if instance_cfg[:auth_mode] == :chatgpt
+                domain_id = chatgpt_quota_domain(instance_cfg: instance_cfg)
+                return operations.each_key.to_h { |op| [op, domain_id] }
+              end
+
               org = instance_cfg[:openai_organization_id]
               project = instance_cfg[:openai_project_id]
               return {} unless non_blank_string?(org)
@@ -147,12 +192,21 @@ module Legion
               operations.each_key.to_h { |op| [op, domain_id] }
             end
 
-            def build_offering_metadata(model_id:, instance_key:)
-              {
+            def chatgpt_quota_domain(instance_cfg:)
+              identity = Legion::JSON.dump([instance_cfg.fetch(:account_id), instance_cfg[:workspace_id]])
+              "chatgpt:#{::Digest::SHA256.hexdigest(identity)}"
+            end
+
+            def build_offering_metadata(model_id:, instance_key:, instance_cfg:)
+              metadata = {
                 raw_model: model_id,
                 instance_id: instance_key.instance_id,
                 physical_id: instance_key.physical_id
               }
+              return metadata unless instance_cfg[:auth_mode] == :chatgpt
+
+              metadata.merge(auth_mode: :chatgpt, account_id: instance_cfg.fetch(:account_id),
+                             workspace_id: instance_cfg[:workspace_id])
             end
 
             def build_operation_evidence(operations:)
@@ -181,6 +235,54 @@ module Legion
               result
             end
 
+            def build_chatgpt_capability_evidence(model_data:)
+              statuses = {
+                completion: %i[supported provider_implementation],
+                streaming: %i[supported provider_implementation],
+                embedding: %i[unsupported provider_implementation],
+                structured_output: %i[unsupported provider_implementation],
+                vision: [chatgpt_vision_status(model_data: model_data), :provider_catalog],
+                thinking: [chatgpt_thinking_status(model_data: model_data), :provider_catalog],
+                tools: [chatgpt_tools_status(model_data: model_data), :provider_catalog]
+              }
+              statuses.to_h do |capability, (status, source)|
+                source = :absent if status == :unknown
+                [capability, cap_evidence(capability: capability, status: status, source: source)]
+              end
+            end
+
+            def chatgpt_vision_status(model_data:)
+              modalities = model_data[:input_modalities]
+              return :unknown unless modalities.is_a?(Array)
+
+              modalities.include?('image') ? :supported : :unsupported
+            end
+
+            def chatgpt_tools_status(model_data:)
+              return :supported if model_data[:supports_tools] == true
+              return :unsupported if model_data[:supports_tools] == false
+              return :supported if model_data[:supports_parallel_tool_calls] == true
+
+              :unknown
+            end
+
+            def chatgpt_thinking_status(model_data:)
+              efforts = chatgpt_reasoning_efforts(model_data: model_data)
+              return :unknown if efforts.empty?
+
+              efforts.all?('none') ? :unsupported : :supported
+            end
+
+            def chatgpt_reasoning_efforts(model_data:)
+              levels = model_data[:supported_reasoning_levels]
+              efforts = if levels.is_a?(Array)
+                          levels.map { |level| level.is_a?(Hash) ? level[:effort] : level }
+                        else
+                          [model_data[:default_reasoning_level]].compact
+                        end
+              efforts.all? { |effort| effort.is_a?(String) && !effort.empty? } ? efforts : []
+            end
+
             def build_standard_capability_evidence(caps)
               STANDARD_CAPABILITY_CHECKS.to_h do |cap_sym, evidence_key|
                 present = caps.include?(cap_sym)
@@ -204,9 +306,13 @@ module Legion
               )
             end
 
-            def build_context_evidence(model_id:, model_data:)
+            def build_context_evidence(model_id:, model_data:, instance_cfg:)
               ctx = model_data[:context_window] || model_data[:max_model_len]
-              ctx ||= capability_entry_for(model_id)[:context_window]
+              ctx ||= if instance_cfg[:auth_mode] == :chatgpt
+                        model_data[:max_context_window]
+                      else
+                        capability_entry_for(model_id)[:context_window]
+                      end
               if ctx.is_a?(Integer) && ctx.positive?
                 Legion::Extensions::Llm::Inventory::ValueEvidence.new(status: :known, value: ctx,
                                                                       source: :provider_catalog)
@@ -225,7 +331,8 @@ module Legion
               end
             end
 
-            def build_embedding_dimensions_evidence(model_id:, model_data:)
+            def build_embedding_dimensions_evidence(model_id:, model_data:, instance_cfg:)
+              return absent_value_evidence if instance_cfg[:auth_mode] == :chatgpt
               return absent_value_evidence unless model_id.to_s.start_with?('text-embedding-')
 
               dims = model_data[:dimensions] || model_data[:embedding_dimensions]

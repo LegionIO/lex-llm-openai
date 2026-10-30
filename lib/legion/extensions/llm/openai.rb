@@ -3,6 +3,8 @@
 require 'legion/extensions/llm'
 require 'legion/extensions/llm/openai/provider'
 require 'legion/extensions/llm/openai/translator'
+require 'legion/extensions/llm/openai/chatgpt/auth'
+require 'legion/extensions/llm/openai/chatgpt/provider'
 require 'legion/extensions/llm/openai/instance_discovery'
 require 'legion/extensions/llm/openai/version'
 require 'legion/extensions/llm/openai/actors/discovery'
@@ -18,9 +20,10 @@ module Legion
         PROVIDER_FAMILY = :openai
 
         def self.default_settings
-          ::Legion::Extensions::Llm.provider_settings(
+          base = ::Legion::Extensions::Llm.provider_settings(
             family: PROVIDER_FAMILY,
             instance: {
+              auth_mode: :api_key,
               endpoint: 'https://api.openai.com',
               tier: :frontier,
               transport: :http,
@@ -44,6 +47,7 @@ module Legion
               }
             }
           )
+          base.merge(chatgpt: { client_id: 'app_EMoamEEZ73f0CkXaXp7hrann' })
         end
 
         def self.provider_class

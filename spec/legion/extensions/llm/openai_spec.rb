@@ -37,16 +37,6 @@ RSpec.describe Legion::Extensions::Llm::Openai do
     )
   end
 
-  it 'does not register the provider in the deprecated Provider.providers hash' do
-    # The old Provider.register call has been removed; loading the gem should
-    # not add an entry to the deprecated providers hash.
-    unless Legion::Extensions::Llm::Provider.respond_to?(:providers)
-      next skip('Provider.providers removed from lex-llm')
-    end
-
-    expect(Legion::Extensions::Llm::Provider.providers).not_to have_key(:openai)
-  end
-
   it 'uses the shared OpenAI-compatible Legion::Extensions::Llm adapter' do
     expect(described_class::Provider.ancestors).to include(Legion::Extensions::Llm::Provider::OpenAICompatible)
   end

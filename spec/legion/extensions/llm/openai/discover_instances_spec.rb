@@ -8,6 +8,7 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
   let(:credential_sources) { Legion::Extensions::Llm::CredentialSources }
 
   before do
+    allow(Legion::Extensions::Llm::Openai::Chatgpt::Auth).to receive(:instances).and_return({})
     allow(credential_sources).to receive_messages(
       env: nil,
       codex_token: nil,
@@ -36,8 +37,8 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
   context 'with codex bearer token' do
     before { allow(credential_sources).to receive(:codex_token).and_return('codex-bearer-tok') }
 
-    it 'returns a :codex instance with tier :frontier' do
-      expect(discover).to include(codex: a_hash_including(openai_api_key: 'codex-bearer-tok', tier: :frontier))
+    it 'does not publish another harness subscription token as an API key' do
+      expect(discover).to be_empty
     end
   end
 
@@ -163,10 +164,8 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
       stub_claude_config('same-key')
     end
 
-    it 'deduplicates via CredentialSources.dedup_credentials' do
-      allow(credential_sources).to receive(:dedup_credentials).and_call_original
-      discover
-      expect(credential_sources).to have_received(:dedup_credentials)
+    it 'keeps one API-key instance for duplicate discovered credentials' do
+      expect(discover.keys).to eq([:env])
     end
   end
 
@@ -180,7 +179,8 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     end
 
     it 'returns all discovered instances' do
-      expect(discover.keys).to include(:env, :codex_env, :codex, :codex_key, :claude, :settings, :my_gw)
+      expect(discover.keys).to include(:env, :codex_env, :codex_key, :claude, :settings, :my_gw)
+      expect(discover).not_to have_key(:codex)
     end
   end
 
@@ -188,6 +188,45 @@ RSpec.describe Legion::Extensions::Llm::Openai, '.discover_instances' do
     it 'returns an empty hash' do
       expect(discover).to eq({})
     end
+  end
+
+  context 'with a native named ChatGPT login' do
+    before do
+      allow(Legion::Extensions::Llm::Openai::Chatgpt::Auth).to receive(:instances).and_return(
+        'personal' => { instance: 'personal', account_id: 'acct-fixture', workspace_id: nil, status: :authenticated }
+      )
+    end
+
+    it 'rejects an API-key configuration under the same operator name' do
+      stub_settings(instances: { personal: { api_key: 'sk-conflicting-key' } })
+
+      expect { discover }.to raise_error(ArgumentError, /conflicts/)
+    end
+
+    it 'honors an explicit disable without requiring another login or mode declaration' do
+      stub_env('OPENAI_API_KEY', 'sk-still-enabled')
+      stub_settings(instances: { personal: { enabled: false } })
+
+      expect(discover.keys).to eq([:env])
+    end
+
+    it 'rejects a configured account that contradicts the native identity' do
+      stub_settings(instances: { personal: { auth_mode: 'chatgpt', account_id: 'acct-other' } })
+
+      expect { discover }.to raise_error(ArgumentError, /identity conflicts/)
+    end
+
+    it 'does not accept configured credentials for a native login' do
+      stub_settings(instances: { personal: { auth_mode: 'chatgpt', api_key: 'not-a-subscription-key' } })
+
+      expect { discover }.to raise_error(ArgumentError, /native login records/)
+    end
+  end
+
+  it 'rejects an unknown authentication mode rather than assuming API-key semantics' do
+    stub_settings(instances: { personal: { auth_mode: 'unknown', api_key: 'sk-key' } })
+
+    expect { discover }.to raise_error(ArgumentError, /authentication mode/)
   end
 
   # NOTE: .resolve_default_model removed in SSOT v3 migration (v0.5.0).

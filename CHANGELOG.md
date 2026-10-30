@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.7] - 2026-10-29
+
+### Added
+- Native, independently named ChatGPT subscription instances in the existing OpenAI family, with browser PKCE and device login, token-free status, serialized refresh, and logout generation barriers.
+- Configurable `extensions.llm.openai.chatgpt.client_id` with the existing Codex public client ID as its default; browser/device login retain the selected client through code exchange, and refresh uses the configured client.
+- Owner-only durable credential storage, atomic token rotation, account/workspace binding checks, bounded login cancellation/deadlines, and explicit reauthentication state for revoked grants.
+- Subscription Responses translation and incremental SSE decoding through the inherited shared provider/connection funnel, preserving correlated tool calls, encrypted reasoning, usage, terminal state, and safe typed errors.
+- Account-specific exact model discovery and conservative capability/operation evidence; account/workspace quota domains remain stable across access-token rotation.
+- Real local HTTP and signed fleet regression coverage for named bindings, account replacement/logout, unsupported controls, streaming errors/cancellation, and API-key coexistence.
+
+### Changed
+- Require `lex-llm >= 0.8.5`; native subscription catalog/inference requires the shared `extensions.llm.ssl.verify` setting to be explicitly `true`. Its shared default remains `false`.
+- Stop treating Codex subscription bearer tokens as OpenAI API keys. Genuine existing API-key sources and behavior are retained; no external subscription credential import is added.
+- Replace forwarding-only fleet assertions with real signed receiver/provider behavior checks, and document native auth lifecycle, configuration, discovery, and release prerequisites.
+
+### Release Gates
+- CLI integration remains in LegionIO/LegionIO#249; the shared TLS change remains in LegionIO/lex-llm#51.
+- End-to-end tool workflows still require shared-owner fixes for fleet tool-definition rehydration, native tool-loop encrypted reasoning preservation, and client streaming Hash tool fragments. These were reproduced through the real shared boundaries rather than bypassed in this provider.
+- Local fixture verification is not authenticated upstream compatibility proof. Authorized live subscription verification remains outstanding; issue #16 is not closed by this provider implementation alone.
+
 ## [0.6.6] - 2026-08-25
 
 ### Fixed

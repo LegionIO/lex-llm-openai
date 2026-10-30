@@ -4,8 +4,8 @@ source 'https://rubygems.org'
 
 gemspec
 
-# Local-tree resolution: use the adjacent lex-llm checkout when present so the
-# canonical-boundary work resolves against the unreleased 0.7.7.
+# Resolve the adjacent shared-core checkout when present, including its required
+# 0.8.5 TLS verification setting for native ChatGPT subscription connections.
 group :test do
   lex_llm_path = File.expand_path('../lex-llm', __dir__)
   gem 'lex-llm', path: lex_llm_path if Dir.exist?(lex_llm_path)
