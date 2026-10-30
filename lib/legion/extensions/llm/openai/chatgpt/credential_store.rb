@@ -205,7 +205,7 @@ module Legion
             def validate_ancestor(info:)
               return if info.mode.nobits?(0o022)
 
-              storage_error! unless info.uid.zero? && info.mode & 0o1000 != 0
+              storage_error! unless info.uid.zero? && info.mode.anybits?(0o1000)
             end
 
             def with_lock(instance:, create:, check: nil, &)
